@@ -25,7 +25,6 @@ import numpy as np
 import pandas as pd
 from skimage import io, util
 from skimage.transform import resize, resize_local_mean
-from botocore.exceptions import ClientError
 from dask_jobqueue import LSFCluster
 from distributed import LocalCluster
 from tifffile import TiffFile
