@@ -24,7 +24,7 @@ from dask.diagnostics import ProgressBar, Profiler, ResourceProfiler, CacheProfi
 import numpy as np
 import pandas as pd
 from skimage import io, util
-from skimage.transform import resize, resize_local_mean
+from skimage.transform import resize, downscale_local_mean
 from dask_jobqueue import LSFCluster
 from distributed import LocalCluster
 from tifffile import TiffFile
@@ -398,12 +398,8 @@ def downsample_area(out_tile_jl, coord, shape_leaf_px, scratch):
     ixx = ix+(shape_leaf_px[2] >> 1)
     iyy = iy+(shape_leaf_px[1] >> 1)
     izz = iz+(shape_leaf_px[0] >> 1)
-    if scratch.dtype is np.dtype('uint8'):
-        out_tile_jl[iz:izz, iy:iyy, ix:ixx] = util.img_as_ubyte(resize_local_mean(scratch, (shape_leaf_px[0]>>1, shape_leaf_px[1]>>1, shape_leaf_px[2]>>1)))
-    elif scratch.dtype is np.dtype('uint16'):
-        out_tile_jl[iz:izz, iy:iyy, ix:ixx] = util.img_as_uint(resize_local_mean(scratch, (shape_leaf_px[0]>>1, shape_leaf_px[1]>>1, shape_leaf_px[2]>>1)))
-    elif scratch.dtype is np.dtype('float32'):
-        out_tile_jl[iz:izz, iy:iyy, ix:ixx] = util.img_as_float32(resize_local_mean(scratch, (shape_leaf_px[0]>>1, shape_leaf_px[1]>>1, shape_leaf_px[2]>>1)))
+    down_img = downscale_local_mean(scratch, (2, 2 ,2))
+    out_tile_jl[iz:izz, iy:iyy, ix:ixx] = down_img.astype(scratch.dtype)
 
 def get_octree_relative_path(chunk_coord, nlevels, level):
     relpath = ''
