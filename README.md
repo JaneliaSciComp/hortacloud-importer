@@ -27,7 +27,7 @@ commandline arguments:
   --lsf                                   use LSF cluster
   --memory MEMORY                         memory amount per thread (for LSF cluster)
   --project PROJECT                       project name (for LSF cluster)
-  --maxjobs MAXJOBS                       maximum jobs (for LSF cluster)
+  --maxjobs MAXJOBS                       maximum number of jobs (for LSF cluster)
   
 example: 
 python3 /tiff2octree/tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area
