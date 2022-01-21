@@ -495,23 +495,6 @@ def build_octree_from_tiff_slices():
     dmethod = args.downsample
     monitoring = args.monitor
 
-    """     
-    dir_list = os.listdir(indir)
-    filelist = []
-    for filename in fnmatch.filter(dir_list,'*.tif'):
-        filelist.append(os.path.join(dir_list, filename))
-    
-    filelist.sort()
-
-    im_width = 0
-    im_height = 0
-    with TiffFile(filelist[0]) as tif:
-        print(len(tif.pages))
-        im_width = tif.pages[0].imagewidth
-        im_height = tif.pages[0].imagelength
-    dim = [im_width, im_height, filelist.length]
-    """
-
     my_lsf_kwargs={}
     if args.memory:
        my_lsf_kwargs['mem'] = args.memory
@@ -546,8 +529,6 @@ def build_octree_from_tiff_slices():
     dim = np.asarray(images.shape)
     print("Will generate octree with " + str(nlevels) +" levels to " + str(outdir))
     print("Image dimensions: " + str(dim))
-
-    # crop image to a power-of-two multiple of the octree leaf size
     
     while(dim[0] % pow(2, nlevels) > 0):
         dim[0] -= 1
@@ -579,9 +560,6 @@ def build_octree_from_tiff_slices():
             dask.compute(futures)
 
     client.close()
-
-    #jobs = []
-    #octree_division(jobs, ch, nlevels, outdir, dim_leaf, "", np.array([0, dim[0]-1], [0, dim[1]-1], [0, dim[2]-1]))
 
 
 def main():
