@@ -4,9 +4,10 @@ a tiff-to-octree converter for dask
 ## Initial Setup
 1. Install miniconda (https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
 2. Run ```conda install dask```
-3. Run ```conda install dask_jobqueue```
-4. Run ```conda install tifffile```
-5. Run ```conda install skimage```
+3. Run ```conda install dask-jobqueue -c conda-forge```
+4. Run ```conda install dask-image```
+5. Run ```conda install tifffile```
+6. Run ```conda install scikit-image```
 
 ## Usage
 ```
