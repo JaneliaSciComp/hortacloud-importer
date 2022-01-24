@@ -32,4 +32,5 @@ commandline arguments:
   
 example: 
 python3 /tiff2octree/tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area
+python3 /tiff2octree/tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area --lsf --project scicompsoft --memory 12GB --maxjobs 10
 ```
