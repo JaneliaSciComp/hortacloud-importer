@@ -471,7 +471,7 @@ def build_octree_from_tiff_slices():
     parser.add_argument("-c", "--channel", dest="channel", type=int, default=0, help="channel id")
     parser.add_argument("-d", "--downsample", dest="downsample", type=str, default='area', help="downsample method: 2ndmax, area, aa (anti-aliasing)")
     parser.add_argument("-m", "--monitor", dest="monitor", default=False, action="store_true", help="activate monitoring")
-    parser.add_argument("--memory", dest="memory", type=str, default=None, help="memory amount per thread (for LSF cluster)")
+    parser.add_argument("--memory", dest="memory", type=str, default="16GB", help="memory amount per thread (for LSF cluster)")
     parser.add_argument("--project", dest="project", type=str, default=None, help="project name (for LSF cluster)")
     parser.add_argument("--maxjobs", dest="maxjobs", type=int, default=16, help="maximum jobs (for LSF cluster)")
     parser.add_argument("--lsf", dest="lsf", default=False, action="store_true", help="use LSF cluster")
@@ -493,14 +493,14 @@ def build_octree_from_tiff_slices():
 
     my_lsf_kwargs={}
     if args.memory:
-       my_lsf_kwargs['mem'] = args.memory
+       my_lsf_kwargs['memory'] = args.memory
     if args.project:
        my_lsf_kwargs['project'] = args.project
     
     cluster = None
     if args.lsf:
         cluster = get_cluster(deployment="lsf", lsf_kwargs = my_lsf_kwargs)
-        cluster.scale(maximum_jobs = args.maxjobs)
+        cluster.adapt(minimum_jobs=1, maximum_jobs = args.maxjobs)
     else:
         cluster = get_cluster(deployment="local")
     
