@@ -2,6 +2,8 @@
 import argparse
 import fnmatch
 import glob
+import io
+import re
 import json
 import logging
 import os
@@ -11,7 +13,6 @@ import time
 import uuid
 import warnings
 from pathlib import Path
-from shutil import which
 from typing import Any, Dict, List, Optional, Union
 
 import dask
@@ -23,16 +24,21 @@ from dask.distributed import Client, progress
 from dask.diagnostics import ProgressBar, Profiler, ResourceProfiler, CacheProfiler, visualize
 import numpy as np
 import pandas as pd
-from skimage import io, util
+import skimage
+from skimage import util
 from skimage.transform import resize, downscale_local_mean
 from dask_jobqueue import LSFCluster
 from distributed import LocalCluster
 from tifffile import TiffFile
 from multiprocessing.pool import ThreadPool
 
-from shutil import which
+from shutil import which, copyfile
 from typing import Union, List, Dict, Any, Optional
 import warnings
+
+import ktx
+from ktx.util import create_mipmaps, mipmap_dimension, interleave_channel_arrays, downsample_array_xy
+from ktx.octree.ktx_from_rendered_tiff import RenderedMouseLightOctree, RenderedTiffBlock
 
 dask.config.set({"jobqueue.lsf.use-stdin": True})
 
@@ -333,7 +339,7 @@ def downsample(out_tile_jl, coord, shape_leaf_px, scratch):
                 out_tile_jl[tmpy, tmpx, tmpz] = downsampling_function(scratch[y:y + 1, x:x + 1, z:z + 1])
 
 def save_data(path, image):
-    io.imsave(path, image)
+    skimage.io.imsave(path, image)
 
 def octree_division(jobs, ch, nlevels, targetpath, dim_leaf, relpath, img_view):
         morton = relpath.split(os.path.sep)
@@ -407,12 +413,14 @@ def get_octree_relative_path(chunk_coord, nlevels, level):
     for lv in range(nlevels-1, nlevels-level-1, -1):
         d = pow(2, lv)
         octant_path = str(1 + int(pos[2] / d) + 2 * int(pos[1] / d) + 4 * int(pos[0] / d))
-        relpath = os.path.join(relpath, octant_path)
+        if lv < nlevels-1:
+            relpath = os.path.join(relpath, octant_path)
         pos[2] = pos[2] - int(pos[2] / d) * d
         pos[1] = pos[1] - int(pos[1] / d) * d
         pos[0] = pos[0] - int(pos[0] / d) * d
     
     return relpath
+
 
 def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
     if block_id == None:
@@ -427,9 +435,10 @@ def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
 
     print(full_path)
 
-    io.imsave(full_path, chunk)
+    skimage.io.imsave(full_path, chunk, compress=6)
 
     return np.array(block_id[0])[None, None, None] if block_id != None else np.array(0)[None, None, None]
+
 
 def downsample_and_save_block(chunk_coord, target_path, nlevels, level, dim_leaf, ch, type, downsampling_method):
 
@@ -442,7 +451,7 @@ def downsample_and_save_block(chunk_coord, target_path, nlevels, level, dim_leaf
     
     for oct in range(1, 9):
         blk_path = os.path.join(dir_path, str(oct))
-        scratch = io.imread(os.path.join(blk_path, img_name))
+        scratch = skimage.io.imread(os.path.join(blk_path, img_name))
         if downsampling_method == 'area':
             downsample_area(img_down, oct, dim_leaf, scratch)
         elif downsampling_method == 'aa':
@@ -450,12 +459,57 @@ def downsample_and_save_block(chunk_coord, target_path, nlevels, level, dim_leaf
         else:
             downsample_2ndmax(img_down, oct, dim_leaf, scratch)
 
-    full_path = os.path.join(dir_path, "default.{0}.tif".format(ch))
+    full_path = os.path.join(dir_path, img_name)
 
     print(full_path)
 
-    io.imsave(full_path, img_down)
+    skimage.io.imsave(full_path, img_down, compress=6)
 
+
+def convert_block_ktx(chunk_coord, source_path, target_path, nlevels, level, downsample_intensity, downsample_xy, make_dir):
+
+    relpath = get_octree_relative_path(chunk_coord, nlevels, level)
+    if make_dir:
+        dir_path = os.path.join(target_path, relpath)
+        Path(dir_path).mkdir(parents=True, exist_ok=True)
+
+    octree_path0 = relpath.split(os.path.sep)
+    octree_path = []
+    for level in octree_path0:
+        if re.match(r'[1-8]', level):
+            octree_path.append(int(level))
+    
+    o = RenderedMouseLightOctree(input_folder=source_path, downsample_intensity=downsample_intensity, downsample_xy=downsample_xy)
+    block = RenderedTiffBlock(o.input_folder, o, octree_path)
+    
+    file_name = 'block'
+    if downsample_intensity:
+        file_name += '_8'
+    if downsample_xy:
+        file_name += '_xy'
+    opath1 = "".join([str(n) for n in block.octree_path])
+    file_name += '_'+opath1+".ktx"
+    output_dir = os.path.join(target_path, relpath)
+    full_file = os.path.join(output_dir, file_name)
+    
+    print(full_file)
+    
+    overwrite = True
+    if os.path.exists(full_file) and not overwrite:
+        file_size = os.stat(full_file).st_size
+        if file_size > 0:
+            print("Skipping existing file")
+            return
+    f = open(full_file, 'wb')
+    try:
+        block.write_ktx_file(f)
+        f.flush()
+        f.close()
+    except:
+        print("Error writing file %s" % full_file)
+        f.flush()
+        f.close()
+        os.unlink(f.name)
 
 def build_octree_from_tiff_slices():
     argv = sys.argv
@@ -464,17 +518,21 @@ def build_octree_from_tiff_slices():
     usage_text = ("Usage:" + "  slice2octree.py" + " [options]")
     parser = argparse.ArgumentParser(description=usage_text)
     parser.add_argument("-t", "--thread", dest="number", type=int, default=16, help="number of threads")
-    parser.add_argument("-i", "--inputdir", dest="input", type=str, default=None, help="input directory")
-    parser.add_argument("-f", "--inputfile", dest="file", type=str, default=None, help="input image stack")
+    parser.add_argument("-i", "--inputdir", dest="input", type=str, default="", help="input directories")
+    parser.add_argument("-f", "--inputfile", dest="file", type=str, default="", help="input image stacks")
     parser.add_argument("-o", "--output", dest="output", type=str, default="", help="output directory")
     parser.add_argument("-l", "--level", dest="level", type=int, default=1, help="number of levels")
     parser.add_argument("-c", "--channel", dest="channel", type=int, default=0, help="channel id")
     parser.add_argument("-d", "--downsample", dest="downsample", type=str, default='area', help="downsample method: 2ndmax, area, aa (anti-aliasing)")
     parser.add_argument("-m", "--monitor", dest="monitor", default=False, action="store_true", help="activate monitoring")
+    parser.add_argument("--origin", dest="origin", type=str, default="0,0,0", help="position of the corner of the top-level image in nanometers")
+    parser.add_argument("--voxsize", dest="voxsize", type=str, default="1.0,1.0,1.0", help="voxel size of the top-level image")
     parser.add_argument("--memory", dest="memory", type=str, default="16GB", help="memory amount per thread (for LSF cluster)")
     parser.add_argument("--project", dest="project", type=str, default=None, help="project name (for LSF cluster)")
     parser.add_argument("--maxjobs", dest="maxjobs", type=int, default=16, help="maximum jobs (for LSF cluster)")
     parser.add_argument("--lsf", dest="lsf", default=False, action="store_true", help="use LSF cluster")
+    parser.add_argument("--ktx", dest="ktx", default=False, action="store_true", help="generate ktx files")
+    parser.add_argument("--ktxout", dest="ktxout", type=str, default=None, help="output directory for a ktx octree")
 
     if not argv:
         parser.print_help()
@@ -483,13 +541,20 @@ def build_octree_from_tiff_slices():
     args = parser.parse_args(argv)
 
     tnum = args.number
-    indir = args.input
-    infile = args.file
+    indirs = args.input.split(",")
+    infiles = args.file.split(",")
     outdir = args.output
     nlevels = args.level
     ch = args.channel
     dmethod = args.downsample
     monitoring = args.monitor
+    ktxout = args.ktxout
+    ktx_mkdir = False
+
+    if not ktxout:
+        ktxout = outdir
+    else:
+        ktx_mkdir = True
 
     my_lsf_kwargs={}
     if args.memory:
@@ -515,10 +580,10 @@ def build_octree_from_tiff_slices():
         client = Client(address=cluster)
 
     images = None
-    if indir:
-        images = dask_image.imread.imread(indir+'/*.tif')
-    elif infile:
-        images = dask_image.imread.imread(infile)
+    if len(indirs) > 0 and indirs[0]:
+        images = dask_image.imread.imread(indirs[0]+'/*.tif')
+    elif len(infiles) > 0 and infiles[0]:
+        images = dask_image.imread.imread(infiles[0])
     else:
         print('Please specify an input dataset.')
         return
@@ -540,8 +605,71 @@ def build_octree_from_tiff_slices():
 
     ranges = [(c, c+dim_leaf[0]) for c in range(0,dim[0],dim_leaf[0])]
 
+
+    ostr = args.origin.split(",")
+    o = []
+    if len(ostr) > 0:
+        o.append(ostr[0])
+    else:
+        o.append("0.0")
+    if len(ostr) > 1:
+        o.append(ostr[1])
+    else:
+        o.append("0.0")
+    if len(ostr) > 2:
+        o.append(ostr[2])
+    else:
+        o.append("0.0")
+
+    vsstr = args.voxsize.split(",")
+    vs = []
+    if len(vsstr) > 0:
+        vs.append(float(vsstr[0]))
+    else:
+        vs.append(1.0)
+    if len(vsstr) > 1:
+        vs.append(float(vsstr[1]))
+    else:
+        vs.append(1.0)
+    if len(vsstr) > 2:
+        vs.append(float(vsstr[2]))
+    else:
+        vs.append(1.0)
+
+    l = []
+    l.append("ox: " + o[0])
+    l.append("oy: " + o[1])
+    l.append("oz: " + o[2])
+    l.append("sx: " + str(dim[0] * vs[0]))
+    l.append("sy: " + str(dim[1] * vs[1]))
+    l.append("sz: " + str(dim[2] * vs[2]))
+    l.append("nl: " + str(nlevels))
+
+    tr_path = os.path.join(outdir, "transform.txt")
+    with open(tr_path, mode='w') as f:
+        f.write('\n'.join(l))
+
+    if ktx_mkdir:
+        Path(ktxout).mkdir(parents=True, exist_ok=True)
+        copyfile(tr_path, os.path.join(ktxout, "transform.txt"))
+
     #initial
     volume.map_blocks(save_block, outdir, nlevels, dim_leaf, ch, chunks=(1,1,1)).compute()
+    ch_ids = [ch]
+    if len(indirs) > 0 and indirs[0]:
+        for i in range(1, len(indirs)):
+            images = dask_image.imread.imread(indirs[i]+'/*.tif')
+            adjusted = images[:dim[0], :dim[1], :dim[2]]
+            volume = adjusted.rechunk(dim_leaf)
+            volume.map_blocks(save_block, outdir, nlevels, dim_leaf, ch+i, chunks=(1,1,1)).compute()
+            ch_ids.append(ch+i)
+    elif len(infiles) > 0 and infiles[0]:
+        for i in range(1, len(infiles)):
+            images = dask_image.imread.imread(infiles[i])
+            adjusted = images[:dim[0], :dim[1], :dim[2]]
+            volume = adjusted.rechunk(dim_leaf)
+            volume.map_blocks(save_block, outdir, nlevels, dim_leaf, ch+i, chunks=(1,1,1)).compute()
+            ch_ids.append(ch+i)
 
     #downsample
     for lv in range(nlevels-1, 0, -1):
@@ -550,10 +678,24 @@ def build_octree_from_tiff_slices():
         for z in range(1, bnum+1):
             for y in range(1, bnum+1):
                 for x in range(1, bnum+1):
-                    future = dask.delayed(downsample_and_save_block)((z,y,x), outdir, nlevels, lv, dim_leaf, ch, volume.dtype, dmethod)
-                    futures.append(future)
+                    for c in ch_ids:
+                        future = dask.delayed(downsample_and_save_block)((z,y,x), outdir, nlevels, lv, dim_leaf, c, volume.dtype, dmethod)
+                        futures.append(future)
         with ProgressBar():
             dask.compute(futures)
+
+    #ktx conversion
+    if args.ktx:
+        for lv in range(nlevels, 0, -1):
+            futures = []
+            bnum = pow(2, lv-1)
+            for z in range(1, bnum+1):
+                for y in range(1, bnum+1):
+                    for x in range(1, bnum+1):
+                        future_ktx = dask.delayed(convert_block_ktx)((z,y,x), outdir, ktxout, nlevels, lv, True, True, ktx_mkdir if lv == nlevels else False)
+                        futures.append(future_ktx)
+            with ProgressBar():
+                dask.compute(futures)
 
     client.close()
 
