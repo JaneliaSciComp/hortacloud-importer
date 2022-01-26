@@ -25,12 +25,17 @@ commandline arguments:
                                           http://(NodeName).int.janelia.org:8989/status
                                           (e.g. http://h07u01.int.janelia.org:8989/status)
   
-  --lsf                                   use LSF cluster
-  --memory MEMORY                         memory amount per thread (for LSF cluster)
-  --project PROJECT                       project name (for LSF cluster)
-  --maxjobs MAXJOBS                       maximum number of jobs (for LSF cluster)
+  --origin ORIGIN       position of the corner of the top-level image in nanometers
+  --voxsize VOXSIZE     voxel size of the top-level image
+  --memory MEMORY       memory amount per thread (for LSF cluster)
+  --project PROJECT     project name (for LSF cluster)
+  --maxjobs MAXJOBS     maximum jobs (for LSF cluster)
+  --lsf                 use LSF cluster
+  --ktx                 generate ktx files
+  --ktxout KTXOUT       output directory for a ktx octree
   
-example: 
-python3 /tiff2octree/tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area
-python3 /tiff2octree/tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area --lsf --project scicompsoft --memory 12GB --maxjobs 10
+examples: 
+python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area
+python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area --lsf --project scicompsoft --memory 12GB --maxjobs 10
+python3 tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 -o /output/octree --ktx --ktxout /output/octree/ktx
 ```
