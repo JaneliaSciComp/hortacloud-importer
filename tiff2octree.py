@@ -649,7 +649,7 @@ def build_octree_from_tiff_slices():
     with open(tr_path, mode='w') as f:
         f.write('\n'.join(l))
 
-    if ktx_mkdir:
+    if ktx_mkdir and outdir != ktxout:
         Path(ktxout).mkdir(parents=True, exist_ok=True)
         copyfile(tr_path, os.path.join(ktxout, "transform.txt"))
 
