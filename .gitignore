@@ -1,0 +1,11 @@
+*.class
+*.log
+*.iml
+.idea
+.pyc
+hs_err_pid*
+testdata
+target
+local
+
+.DS_Store
