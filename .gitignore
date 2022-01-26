@@ -1,8 +1,8 @@
 *.class
 *.log
 *.iml
-.idea
-.pyc
+*.idea
+*.pyc
 hs_err_pid*
 testdata
 target
