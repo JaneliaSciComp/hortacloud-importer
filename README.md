@@ -12,6 +12,8 @@ a tiff-to-octree converter for dask
 8. Run ```conda install -y pyopengl```
 9. Run ```conda install pylibtiff -c conda-forge```
 10. Run ```conda install bitarray```
+11. Run ```conda install -c conda-forge rasterio```
+
 
 ## Usage
 ```
@@ -37,9 +39,11 @@ commandline arguments:
   --lsf                 use LSF cluster
   --ktx                 generate ktx files
   --ktxout KTXOUT       output directory for a ktx octree
+  --cluster CLUSTER     address of a dask scheduler server
   
 examples: 
 python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area
 python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area --lsf --project scicompsoft --memory 12GB --maxjobs 10
 python3 tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 -o /output/octree --ktx --ktxout /output/octree/ktx
+python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree --cluster 10.60.0.223:8786
 ```
