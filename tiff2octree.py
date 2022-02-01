@@ -560,6 +560,7 @@ def build_octree_from_tiff_slices():
     parser.add_argument("--lsf", dest="lsf", default=False, action="store_true", help="use LSF cluster")
     parser.add_argument("--ktx", dest="ktx", default=False, action="store_true", help="generate ktx files")
     parser.add_argument("--ktxout", dest="ktxout", type=str, default=None, help="output directory for a ktx octree")
+    parser.add_argument("--cluster", dest="cluster", type=str, default=None, help="address of a dask scheduler server")
 
     if not argv:
         parser.print_help()
@@ -590,13 +591,15 @@ def build_octree_from_tiff_slices():
        my_lsf_kwargs['project'] = args.project
     
     cluster = None
-    if args.lsf:
+    if args.cluster:
+        cluster = args.cluster
+    elif args.lsf:
         cluster = get_cluster(deployment="lsf", lsf_kwargs = my_lsf_kwargs)
         cluster.adapt(minimum_jobs=1, maximum_jobs = args.maxjobs)
+        cluster.scale(tnum)
     else:
         cluster = get_cluster(deployment="local")
-    
-    cluster.scale(tnum)
+        cluster.scale(tnum)
 
     dashboard_address = None
     if monitoring: 
