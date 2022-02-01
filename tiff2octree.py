@@ -40,6 +40,9 @@ import ktx
 from ktx.util import create_mipmaps, mipmap_dimension, interleave_channel_arrays, downsample_array_xy
 from ktx.octree.ktx_from_rendered_tiff import RenderedMouseLightOctree, RenderedTiffBlock
 
+import rasterio
+from rasterio.windows import Window
+
 dask.config.set({"jobqueue.lsf.use-stdin": True})
 
 threading_env_vars = [
@@ -282,7 +285,7 @@ def get_untiled_crop(page, i0, j0, h, w):
     if i0 < 0 or j0 < 0 or i1 >= im_height or j1 >= im_width:
         raise ValueError(f"Requested crop area is out of image bounds.{i0}_{i1}_{im_height}, {j0}_{j1}_{im_width}")
         
-    out = np.empty((page.imagedepth, h, w, page.samplesperpixel), dtype=np.uint8)
+    out = np.empty((page.imagedepth, h, w, page.samplesperpixel), dtype=page.dtype)
     fh = page.parent.filehandle
     
     for index in range(i0, i1):
@@ -407,13 +410,14 @@ def downsample_area(out_tile_jl, coord, shape_leaf_px, scratch):
     down_img = downscale_local_mean(scratch, (2, 2 ,2))
     out_tile_jl[iz:izz, iy:iyy, ix:ixx] = down_img.astype(scratch.dtype)
 
-def get_octree_relative_path(chunk_coord, nlevels, level):
+def get_octree_relative_path(chunk_coord, level):
     relpath = ''
     pos = np.asarray(chunk_coord)
-    for lv in range(nlevels-1, nlevels-level-1, -1):
+    pos = np.add(pos, np.full(3, -1))
+    for lv in range(level-1, -1, -1):
         d = pow(2, lv)
         octant_path = str(1 + int(pos[2] / d) + 2 * int(pos[1] / d) + 4 * int(pos[0] / d))
-        if lv < nlevels-1:
+        if lv < level-1:
             relpath = os.path.join(relpath, octant_path)
         pos[2] = pos[2] - int(pos[2] / d) * d
         pos[1] = pos[1] - int(pos[1] / d) * d
@@ -421,12 +425,35 @@ def get_octree_relative_path(chunk_coord, nlevels, level):
     
     return relpath
 
+def get_cropped_image_rasterio(input_dir, file_paths, z0, y0, x0, d, h, w, type):
+    output = np.zeros((d, h, w), dtype=type)
+    for i in range(z0, z0 + d):
+        if i - z0 < len(file_paths):
+            with rasterio.open(os.path.join(input_dir, file_paths[i - z0])) as src:
+                data = src.read(1, window=Window(x0, y0, w, h))
+                output[i - z0, :h, :w] = data[:, :]
+    return output
+
+def save_block_from_slices(chunk_coord, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type):
+    relpath = get_octree_relative_path(chunk_coord, nlevels)
+
+    dir_path = os.path.join(target_path, relpath)
+    full_path = os.path.join(dir_path, "default.{0}.tif".format(ch))
+
+    #print((dim_leaf[0]*chunk_coord[0], dim_leaf[1]*chunk_coord[1], dim_leaf[2]*chunk_coord[2]))
+
+    img_data = get_cropped_image_rasterio(input_dir, file_paths, dim_leaf[0]*(chunk_coord[0]-1), dim_leaf[1]*(chunk_coord[1]-1), dim_leaf[2]*(chunk_coord[2]-1), dim_leaf[0], dim_leaf[1], dim_leaf[2], type)
+    
+    print(full_path)
+    Path(dir_path).mkdir(parents=True, exist_ok=True)
+    skimage.io.imsave(full_path, img_data, compress=6)
+
 
 def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
     if block_id == None:
         return np.array(0)[None, None, None]
     
-    relpath = get_octree_relative_path(block_id, nlevels, nlevels)
+    relpath = get_octree_relative_path(block_id, nlevels)
 
     dir_path = os.path.join(target_path, relpath)
     Path(dir_path).mkdir(parents=True, exist_ok=True)
@@ -440,9 +467,9 @@ def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
     return np.array(block_id[0])[None, None, None] if block_id != None else np.array(0)[None, None, None]
 
 
-def downsample_and_save_block(chunk_coord, target_path, nlevels, level, dim_leaf, ch, type, downsampling_method):
+def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, type, downsampling_method):
 
-    relpath = get_octree_relative_path(chunk_coord, nlevels, level)
+    relpath = get_octree_relative_path(chunk_coord, level)
 
     dir_path = os.path.join(target_path, relpath)
     img_name = "default.{0}.tif".format(ch)
@@ -466,9 +493,9 @@ def downsample_and_save_block(chunk_coord, target_path, nlevels, level, dim_leaf
     skimage.io.imsave(full_path, img_down, compress=6)
 
 
-def convert_block_ktx(chunk_coord, source_path, target_path, nlevels, level, downsample_intensity, downsample_xy, make_dir):
+def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir):
 
-    relpath = get_octree_relative_path(chunk_coord, nlevels, level)
+    relpath = get_octree_relative_path(chunk_coord, level)
     if make_dir:
         dir_path = os.path.join(target_path, relpath)
         Path(dir_path).mkdir(parents=True, exist_ok=True)
@@ -580,14 +607,27 @@ def build_octree_from_tiff_slices():
         client = Client(address=cluster)
 
     images = None
+    dim = None
+    volume_dtype = None
     if len(indirs) > 0 and indirs[0]:
-        images = dask_image.imread.imread(indirs[0]+'/*.tif')
+        tif_files = [f for f in os.listdir(indirs[0]) if f.endswith('.tif')]
+        tif_files.sort()
+        im_width = 0
+        im_height = 0
+        with TiffFile(os.path.join(indirs[0], tif_files[0])) as tif:
+            im_width = tif.pages[0].imagewidth
+            im_height = tif.pages[0].imagelength
+            print(tif.pages[0].dtype)
+            volume_dtype = tif.pages[0].dtype
+        dim = np.asarray((len(tif_files), im_height, im_width))
     elif len(infiles) > 0 and infiles[0]:
         images = dask_image.imread.imread(infiles[0])
+        dim = np.asarray(images.shape)
+        volume_dtype = images.dtype
     else:
         print('Please specify an input dataset.')
         return
-    dim = np.asarray(images.shape)
+    
     print("Will generate octree with " + str(nlevels) +" levels to " + str(outdir))
     print("Image dimensions: " + str(dim))
     
@@ -600,8 +640,6 @@ def build_octree_from_tiff_slices():
     dim_leaf = [x >> (nlevels - 1) for x in dim]
 
     print("Adjusted image size: " + str(dim) + ", Dim leaf: " + str(dim_leaf))
-    adjusted = images[:dim[0], :dim[1], :dim[2]]
-    volume = adjusted.rechunk(dim_leaf)
 
     ranges = [(c, c+dim_leaf[0]) for c in range(0,dim[0],dim_leaf[0])]
 
@@ -654,16 +692,25 @@ def build_octree_from_tiff_slices():
         copyfile(tr_path, os.path.join(ktxout, "transform.txt"))
 
     #initial
-    volume.map_blocks(save_block, outdir, nlevels, dim_leaf, ch, chunks=(1,1,1)).compute()
-    ch_ids = [ch]
-    if len(indirs) > 0 and indirs[0]:
-        for i in range(1, len(indirs)):
-            images = dask_image.imread.imread(indirs[i]+'/*.tif')
-            adjusted = images[:dim[0], :dim[1], :dim[2]]
-            volume = adjusted.rechunk(dim_leaf)
-            volume.map_blocks(save_block, outdir, nlevels, dim_leaf, ch+i, chunks=(1,1,1)).compute()
+    if len(indirs) > 0:
+        ch_ids = []
+        for i in range(0, len(indirs)):
+            if i > 0:
+                tif_files = [os.path.join(indirs[i], f) for f in os.listdir(indirs[i]) if f.endswith('.tif')]
+            chunked_list = [tif_files[j:j+dim_leaf[0]] for j in range(0, len(tif_files), dim_leaf[0])]
+            futures = []
+            bnum = pow(2, nlevels - 1)
+            for z in range(1, bnum+1):
+                for y in range(1, bnum+1):
+                    for x in range(1, bnum+1):
+                        future = dask.delayed(save_block_from_slices)((z,y,x), indirs[i], chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype)
+                        futures.append(future)
+            with ProgressBar():
+                dask.compute(futures)
             ch_ids.append(ch+i)
-    elif len(infiles) > 0 and infiles[0]:
+    elif len(infiles) > 0:
+        volume.map_blocks(save_block, outdir, nlevels, dim_leaf, ch, chunks=(1,1,1)).compute()
+        ch_ids = []
         for i in range(1, len(infiles)):
             images = dask_image.imread.imread(infiles[i])
             adjusted = images[:dim[0], :dim[1], :dim[2]]
@@ -679,7 +726,7 @@ def build_octree_from_tiff_slices():
             for y in range(1, bnum+1):
                 for x in range(1, bnum+1):
                     for c in ch_ids:
-                        future = dask.delayed(downsample_and_save_block)((z,y,x), outdir, nlevels, lv, dim_leaf, c, volume.dtype, dmethod)
+                        future = dask.delayed(downsample_and_save_block)((z,y,x), outdir, lv, dim_leaf, c, volume_dtype, dmethod)
                         futures.append(future)
         with ProgressBar():
             dask.compute(futures)
@@ -692,7 +739,7 @@ def build_octree_from_tiff_slices():
             for z in range(1, bnum+1):
                 for y in range(1, bnum+1):
                     for x in range(1, bnum+1):
-                        future_ktx = dask.delayed(convert_block_ktx)((z,y,x), outdir, ktxout, nlevels, lv, True, True, ktx_mkdir if lv == nlevels else False)
+                        future_ktx = dask.delayed(convert_block_ktx)((z,y,x), outdir, ktxout, lv, True, True, ktx_mkdir if lv == nlevels else False)
                         futures.append(future_ktx)
             with ProgressBar():
                 dask.compute(futures)
