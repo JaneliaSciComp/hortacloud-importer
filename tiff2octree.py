@@ -434,6 +434,10 @@ def get_cropped_image_rasterio(input_dir, file_paths, z0, y0, x0, d, h, w, type)
                 output[i - z0, :h, :w] = data[:, :]
     return output
 
+def save_block_from_slices_batch(chunk_coords, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type):
+    for pos in chunk_coords:
+        save_block_from_slices(pos, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type)
+
 def save_block_from_slices(chunk_coord, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type):
     relpath = get_octree_relative_path(chunk_coord, nlevels)
 
@@ -466,6 +470,9 @@ def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
 
     return np.array(block_id[0])[None, None, None] if block_id != None else np.array(0)[None, None, None]
 
+def downsample_and_save_block_batch(chunk_coords, target_path, level, dim_leaf, ch, type, downsampling_method):
+    for pos in chunk_coords:
+        downsample_and_save_block(pos, target_path, level, dim_leaf, ch, type, downsampling_method)
 
 def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, type, downsampling_method):
 
@@ -492,6 +499,9 @@ def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, typ
 
     skimage.io.imsave(full_path, img_down, compress=6)
 
+def convert_block_ktx_batch(chunk_coords, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir):
+    for pos in chunk_coords:
+        convert_block_ktx(pos, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir)
 
 def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir):
 
@@ -609,6 +619,17 @@ def build_octree_from_tiff_slices():
     else:
         client = Client(address=cluster)
 
+    task_num = tnum * 2
+    if not args.lsf:
+        tmp_batch_num = 0
+        workers_info = client.scheduler_info()['workers']
+        for k in workers_info.keys():
+            tmp_batch_num += workers_info[k]['nthreads']
+        if tmp_batch_num > 0:
+            task_num = tmp_batch_num * 2
+
+    print("batch_num: " + str(task_num))
+
     images = None
     dim = None
     volume_dtype = None
@@ -704,14 +725,23 @@ def build_octree_from_tiff_slices():
             futures = []
             bnum = pow(2, nlevels - 1)
             for z in range(1, bnum+1):
+                batch_block_num = (int)(bnum * bnum / task_num)
+                if batch_block_num < 1: 
+                    batch_block_num = 1
+                coord_list = []
                 for y in range(1, bnum+1):
                     for x in range(1, bnum+1):
-                        future = dask.delayed(save_block_from_slices)((z,y,x), indirs[i], chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype)
-                        futures.append(future)
+                        coord_list.append((z,y,x))
+                        if len(coord_list) >= batch_block_num:
+                            future = dask.delayed(save_block_from_slices_batch)(coord_list, indirs[i], chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype)
+                            futures.append(future)
+                            coord_list = []
             with ProgressBar():
                 dask.compute(futures)
             ch_ids.append(ch+i)
     elif len(infiles) > 0:
+        adjusted = images[:dim[0], :dim[1], :dim[2]]
+        volume = adjusted.rechunk(dim_leaf)
         volume.map_blocks(save_block, outdir, nlevels, dim_leaf, ch, chunks=(1,1,1)).compute()
         ch_ids = []
         for i in range(1, len(infiles)):
@@ -725,12 +755,19 @@ def build_octree_from_tiff_slices():
     for lv in range(nlevels-1, 0, -1):
         futures = []
         bnum = pow(2, lv - 1)
+        batch_block_num = (int)(bnum * bnum * bnum * len(ch_ids) / task_num)
+        if batch_block_num < 1: 
+            batch_block_num = 1
+        coord_list = []
         for z in range(1, bnum+1):
             for y in range(1, bnum+1):
                 for x in range(1, bnum+1):
                     for c in ch_ids:
-                        future = dask.delayed(downsample_and_save_block)((z,y,x), outdir, lv, dim_leaf, c, volume_dtype, dmethod)
-                        futures.append(future)
+                        coord_list.append((z,y,x))
+                        if len(coord_list) >= batch_block_num:
+                            future = dask.delayed(downsample_and_save_block_batch)(coord_list, outdir, lv, dim_leaf, c, volume_dtype, dmethod)
+                            futures.append(future)
+                            coord_list = []
         with ProgressBar():
             dask.compute(futures)
 
@@ -738,12 +775,19 @@ def build_octree_from_tiff_slices():
     if args.ktx:
         for lv in range(nlevels, 0, -1):
             futures = []
-            bnum = pow(2, lv-1)
+            bnum = pow(2, lv - 1)
+            batch_block_num = (int)(bnum * bnum * bnum / task_num)
+            if batch_block_num < 1: 
+                batch_block_num = 1
+            coord_list = []
             for z in range(1, bnum+1):
                 for y in range(1, bnum+1):
                     for x in range(1, bnum+1):
-                        future_ktx = dask.delayed(convert_block_ktx)((z,y,x), outdir, ktxout, lv, True, True, ktx_mkdir if lv == nlevels else False)
-                        futures.append(future_ktx)
+                        coord_list.append((z,y,x))
+                        if len(coord_list) >= batch_block_num:
+                            future_ktx = dask.delayed(convert_block_ktx_batch)(coord_list, outdir, ktxout, lv, True, True, ktx_mkdir if lv == nlevels else False)
+                            futures.append(future_ktx)
+                            coord_list = []
             with ProgressBar():
                 dask.compute(futures)
 
