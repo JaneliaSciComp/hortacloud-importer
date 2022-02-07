@@ -429,9 +429,12 @@ def get_cropped_image_rasterio(input_dir, file_paths, z0, y0, x0, d, h, w, type)
     output = np.zeros((d, h, w), dtype=type)
     for i in range(z0, z0 + d):
         if i - z0 < len(file_paths):
-            with rasterio.open(os.path.join(input_dir, file_paths[i - z0])) as src:
-                data = src.read(1, window=Window(x0, y0, w, h))
-                output[i - z0, :h, :w] = data[:, :]
+            try:
+                with rasterio.open(os.path.join(input_dir, file_paths[i - z0])) as src:
+                    data = src.read(1, window=Window(x0, y0, w, h))
+                    output[i - z0, :h, :w] = data[:, :]
+            except BaseException as err:
+                print(file_paths[i - z0] + f" error: {err=}, {type(err)=}")
     return output
 
 def save_block_from_slices_batch(chunk_coords, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type):
@@ -567,6 +570,7 @@ def build_octree_from_tiff_slices():
     parser.add_argument("--memory", dest="memory", type=str, default="16GB", help="memory amount per thread (for LSF cluster)")
     parser.add_argument("--project", dest="project", type=str, default=None, help="project name (for LSF cluster)")
     parser.add_argument("--maxjobs", dest="maxjobs", type=int, default=16, help="maximum jobs (for LSF cluster)")
+    parser.add_argument("--workerthread", dest="workerthread", type=int, default=1, help="threads per worker (for LSF cluster)")
     parser.add_argument("--lsf", dest="lsf", default=False, action="store_true", help="use LSF cluster")
     parser.add_argument("--ktx", dest="ktx", default=False, action="store_true", help="generate ktx files")
     parser.add_argument("--ktxout", dest="ktxout", type=str, default=None, help="output directory for a ktx octree")
@@ -604,7 +608,7 @@ def build_octree_from_tiff_slices():
     if args.cluster:
         cluster = args.cluster
     elif args.lsf:
-        cluster = get_cluster(deployment="lsf", lsf_kwargs = my_lsf_kwargs)
+        cluster = get_cluster(deployment="lsf", threads_per_worker=args.workerthread, lsf_kwargs = my_lsf_kwargs)
         cluster.adapt(minimum_jobs=1, maximum_jobs = args.maxjobs)
         cluster.scale(tnum)
     else:
