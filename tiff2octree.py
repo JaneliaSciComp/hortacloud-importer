@@ -434,7 +434,7 @@ def get_cropped_image_rasterio(input_dir, file_paths, z0, y0, x0, d, h, w, type)
                     data = src.read(1, window=Window(x0, y0, w, h))
                     output[i - z0, :h, :w] = data[:, :]
             except BaseException as err:
-                print(file_paths[i - z0] + f" error: {err=}, {type(err)=}")
+                print(err)
     return output
 
 def save_block_from_slices_batch(chunk_coords, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type):
