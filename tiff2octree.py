@@ -145,6 +145,7 @@ def get_LocalCluster(threads_per_worker: int = 1, n_workers: int = 0, **kwargs):
 
 def get_cluster(
     threads_per_worker: int = 1,
+    walltime: str = "1:00",
     deployment: Optional[str] = None,
     local_kwargs: Dict[str, Any] = {},
     lsf_kwargs: Dict[str, Any] = {"memory": "16GB"},
@@ -185,7 +186,7 @@ def get_cluster(
             cluster = get_LocalCluster(threads_per_worker, **local_kwargs)
     elif deployment == "lsf":
         if bsub_available():
-            cluster = get_LSFCLuster(threads_per_worker, **lsf_kwargs)
+            cluster = get_LSFCLuster(threads_per_worker, walltime, **lsf_kwargs)
         else:
             raise EnvironmentError(
                 "You requested an LSFCluster but the command `bsub` is not available."
@@ -437,15 +438,19 @@ def get_cropped_image_rasterio(input_dir, file_paths, z0, y0, x0, d, h, w, type)
                 print(err)
     return output
 
-def save_block_from_slices_batch(chunk_coords, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type):
+def save_block_from_slices_batch(chunk_coords, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type, dry):
     for pos in chunk_coords:
-        save_block_from_slices(pos, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type)
+        save_block_from_slices(pos, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type, dry)
 
-def save_block_from_slices(chunk_coord, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type):
+def save_block_from_slices(chunk_coord, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type, dry):
     relpath = get_octree_relative_path(chunk_coord, nlevels)
 
     dir_path = os.path.join(target_path, relpath)
     full_path = os.path.join(dir_path, "default.{0}.tif".format(ch))
+
+    if dry:
+        print(full_path)
+        return
 
     #print((dim_leaf[0]*chunk_coord[0], dim_leaf[1]*chunk_coord[1], dim_leaf[2]*chunk_coord[2]))
 
@@ -570,11 +575,13 @@ def build_octree_from_tiff_slices():
     parser.add_argument("--memory", dest="memory", type=str, default="16GB", help="memory amount per thread (for LSF cluster)")
     parser.add_argument("--project", dest="project", type=str, default=None, help="project name (for LSF cluster)")
     parser.add_argument("--maxjobs", dest="maxjobs", type=int, default=16, help="maximum jobs (for LSF cluster)")
-    parser.add_argument("--workerthread", dest="workerthread", type=int, default=1, help="threads per worker (for LSF cluster)")
+    parser.add_argument("--walltime", dest="walltime", type=str, default="1:00", help="expected lifetime of a worker. Defaults to one hour, i.e. 1:00 (for LSF cluster)")
+    parser.add_argument("--maxbatch", dest="maxbatch", type=int, default=0, help="number of blocks per job")
     parser.add_argument("--lsf", dest="lsf", default=False, action="store_true", help="use LSF cluster")
     parser.add_argument("--ktx", dest="ktx", default=False, action="store_true", help="generate ktx files")
     parser.add_argument("--ktxout", dest="ktxout", type=str, default=None, help="output directory for a ktx octree")
     parser.add_argument("--cluster", dest="cluster", type=str, default=None, help="address of a dask scheduler server")
+    parser.add_argument("--dry", dest="dry", default=False, action="store_true", help="dry run")
 
     if not argv:
         parser.print_help()
@@ -593,6 +600,8 @@ def build_octree_from_tiff_slices():
     ktxout = args.ktxout
     ktx_mkdir = False
 
+    maxbatch = args.maxbatch
+
     if not ktxout:
         ktxout = outdir
     else:
@@ -608,7 +617,7 @@ def build_octree_from_tiff_slices():
     if args.cluster:
         cluster = args.cluster
     elif args.lsf:
-        cluster = get_cluster(deployment="lsf", threads_per_worker=args.workerthread, lsf_kwargs = my_lsf_kwargs)
+        cluster = get_cluster(deployment="lsf", walltime=args.walltime, lsf_kwargs = my_lsf_kwargs)
         cluster.adapt(minimum_jobs=1, maximum_jobs = args.maxjobs)
         cluster.scale(tnum)
     else:
@@ -730,6 +739,8 @@ def build_octree_from_tiff_slices():
             bnum = pow(2, nlevels - 1)
             for z in range(1, bnum+1):
                 batch_block_num = (int)(bnum * bnum / task_num)
+                if maxbatch > 0 and batch_block_num > maxbatch:
+                    batch_block_num = maxbatch
                 if batch_block_num < 1: 
                     batch_block_num = 1
                 coord_list = []
@@ -737,9 +748,12 @@ def build_octree_from_tiff_slices():
                     for x in range(1, bnum+1):
                         coord_list.append((z,y,x))
                         if len(coord_list) >= batch_block_num:
-                            future = dask.delayed(save_block_from_slices_batch)(coord_list, indirs[i], chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype)
+                            future = dask.delayed(save_block_from_slices_batch)(coord_list, indirs[i], chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry)
                             futures.append(future)
                             coord_list = []
+                if len(coord_list) > 0:
+                    future = dask.delayed(save_block_from_slices_batch)(coord_list, indirs[i], chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry)
+                    futures.append(future)
             with ProgressBar():
                 dask.compute(futures)
             ch_ids.append(ch+i)
@@ -755,11 +769,17 @@ def build_octree_from_tiff_slices():
             volume.map_blocks(save_block, outdir, nlevels, dim_leaf, ch+i, chunks=(1,1,1)).compute()
             ch_ids.append(ch+i)
 
+    if args.dry:
+        client.close()
+        return
+
     #downsample
     for lv in range(nlevels-1, 0, -1):
         futures = []
         bnum = pow(2, lv - 1)
         batch_block_num = (int)(bnum * bnum * bnum * len(ch_ids) / task_num)
+        if maxbatch > 0 and batch_block_num > maxbatch:
+            batch_block_num = maxbatch
         if batch_block_num < 1: 
             batch_block_num = 1
         coord_list = []
@@ -772,6 +792,9 @@ def build_octree_from_tiff_slices():
                             future = dask.delayed(downsample_and_save_block_batch)(coord_list, outdir, lv, dim_leaf, c, volume_dtype, dmethod)
                             futures.append(future)
                             coord_list = []
+        if len(coord_list) > 0:
+            future = dask.delayed(downsample_and_save_block_batch)(coord_list, outdir, lv, dim_leaf, c, volume_dtype, dmethod)
+            futures.append(future)
         with ProgressBar():
             dask.compute(futures)
 
@@ -781,6 +804,8 @@ def build_octree_from_tiff_slices():
             futures = []
             bnum = pow(2, lv - 1)
             batch_block_num = (int)(bnum * bnum * bnum / task_num)
+            if maxbatch > 0 and batch_block_num > maxbatch:
+                batch_block_num = maxbatch
             if batch_block_num < 1: 
                 batch_block_num = 1
             coord_list = []
@@ -792,6 +817,9 @@ def build_octree_from_tiff_slices():
                             future_ktx = dask.delayed(convert_block_ktx_batch)(coord_list, outdir, ktxout, lv, True, True, ktx_mkdir if lv == nlevels else False)
                             futures.append(future_ktx)
                             coord_list = []
+            if len(coord_list) > 0:
+                future_ktx = dask.delayed(convert_block_ktx_batch)(coord_list, outdir, ktxout, lv, True, True, ktx_mkdir if lv == nlevels else False)
+                futures.append(future_ktx)
             with ProgressBar():
                 dask.compute(futures)
 
