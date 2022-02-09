@@ -15,6 +15,11 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+try:
+    from os import scandir, walk
+except ImportError:
+    from scandir import scandir, walk
+
 import dask
 import dask.array as da
 import dask.bag as db
@@ -426,23 +431,23 @@ def get_octree_relative_path(chunk_coord, level):
     
     return relpath
 
-def get_cropped_image_rasterio(input_dir, file_paths, z0, y0, x0, d, h, w, type):
+def get_cropped_image_rasterio(file_paths, z0, y0, x0, d, h, w, type):
     output = np.zeros((d, h, w), dtype=type)
     for i in range(z0, z0 + d):
         if i - z0 < len(file_paths):
             try:
-                with rasterio.open(os.path.join(input_dir, file_paths[i - z0])) as src:
+                with rasterio.open(file_paths[i - z0]) as src:
                     data = src.read(1, window=Window(x0, y0, w, h))
                     output[i - z0, :h, :w] = data[:, :]
             except BaseException as err:
                 print(err)
     return output
 
-def save_block_from_slices_batch(chunk_coords, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type, dry):
+def save_block_from_slices_batch(chunk_coords, file_paths, target_path, nlevels, dim_leaf, ch, type, dry):
     for pos in chunk_coords:
-        save_block_from_slices(pos, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type, dry)
+        save_block_from_slices(pos, file_paths, target_path, nlevels, dim_leaf, ch, type, dry)
 
-def save_block_from_slices(chunk_coord, input_dir, file_paths, target_path, nlevels, dim_leaf, ch, type, dry):
+def save_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_leaf, ch, type, dry):
     relpath = get_octree_relative_path(chunk_coord, nlevels)
 
     dir_path = os.path.join(target_path, relpath)
@@ -454,7 +459,7 @@ def save_block_from_slices(chunk_coord, input_dir, file_paths, target_path, nlev
 
     #print((dim_leaf[0]*chunk_coord[0], dim_leaf[1]*chunk_coord[1], dim_leaf[2]*chunk_coord[2]))
 
-    img_data = get_cropped_image_rasterio(input_dir, file_paths, dim_leaf[0]*(chunk_coord[0]-1), dim_leaf[1]*(chunk_coord[1]-1), dim_leaf[2]*(chunk_coord[2]-1), dim_leaf[0], dim_leaf[1], dim_leaf[2], type)
+    img_data = get_cropped_image_rasterio(file_paths, dim_leaf[0]*(chunk_coord[0]-1), dim_leaf[1]*(chunk_coord[1]-1), dim_leaf[2]*(chunk_coord[2]-1), dim_leaf[0], dim_leaf[1], dim_leaf[2], type)
     
     print(full_path)
     Path(dir_path).mkdir(parents=True, exist_ok=True)
@@ -556,6 +561,52 @@ def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_i
         f.close()
         os.unlink(f.name)
 
+def conv_tiled_tiff(input, output, tilesize):
+    if not os.path.exists(input):
+        return input
+
+    is_tiled = True
+    try:    
+        tif = TiffFile(input)
+        is_tiled = tif.pages[0].is_tiled
+        tif.close()
+    except BaseException as err:
+        print(err)
+        return input
+
+    if not is_tiled:
+        try:
+            img = skimage.io.imread(input)
+            skimage.io.imsave(output, img, compress=6, tile=tilesize)
+            print("saved tiled-tiff: " + output)
+        except BaseException as err:
+            print(err)
+            return input
+    
+    return output
+
+def conv_tiled_tiffs(input_list, outdir, tilesize):
+    ret_list = []
+    for fpath in input_list:
+        fname = os.path.basename(fpath)
+        ret = conv_tiled_tiff(fpath, os.path.join(outdir, fname), tilesize)
+        ret_list.append(ret)
+    return ret_list
+
+def delete_files(target_list):
+    for fpath in target_list:
+        try:
+            os.remove(fpath)
+        except:
+            print("Error while deleting file ", fpath)
+
+def scantree(path):
+    for entry in scandir(path):
+        if entry.is_dir(follow_symlinks=False):
+            yield from scantree(entry.path)
+        else:
+            yield entry
+
 def build_octree_from_tiff_slices():
     argv = sys.argv
     argv = argv[1:]
@@ -599,6 +650,9 @@ def build_octree_from_tiff_slices():
     monitoring = args.monitor
     ktxout = args.ktxout
     ktx_mkdir = False
+
+    tmpdir_name = "tmp"
+    tmpdir = os.path.join(outdir, tmpdir_name)
 
     maxbatch = args.maxbatch
 
@@ -647,11 +701,11 @@ def build_octree_from_tiff_slices():
     dim = None
     volume_dtype = None
     if len(indirs) > 0 and indirs[0]:
-        tif_files = [f for f in os.listdir(indirs[0]) if f.endswith('.tif')]
+        tif_files = [os.path.join(indirs[0], f) for f in os.listdir(indirs[0]) if f.endswith('.tif')]
         tif_files.sort()
         im_width = 0
         im_height = 0
-        with TiffFile(os.path.join(indirs[0], tif_files[0])) as tif:
+        with TiffFile(tif_files[0]) as tif:
             im_width = tif.pages[0].imagewidth
             im_height = tif.pages[0].imagelength
             print(tif.pages[0].dtype)
@@ -734,6 +788,24 @@ def build_octree_from_tiff_slices():
         for i in range(0, len(indirs)):
             if i > 0:
                 tif_files = [os.path.join(indirs[i], f) for f in os.listdir(indirs[i]) if f.endswith('.tif')]
+
+            #tiff-to-tiled-tiff conversion
+            delete_tmpfiles = False
+            if im_width >= 4096:
+                print("tiff-to-tiled-tiff conversion")
+                delete_tmpfiles = True
+                Path(tmpdir).mkdir(parents=True, exist_ok=True)
+                chunked_tif_list = np.array_split(tif_files, task_num)
+                futures = []
+                for tlist in chunked_tif_list:
+                    future = dask.delayed(conv_tiled_tiffs)(tlist, tmpdir, (256, 256))
+                    futures.append(future)
+                with ProgressBar():
+                    results = dask.compute(futures)
+                    tif_files = [item for sublist in results[0] for item in sublist]
+                print("done")
+
+            print("writing the highest level")
             chunked_list = [tif_files[j:j+dim_leaf[0]] for j in range(0, len(tif_files), dim_leaf[0])]
             futures = []
             bnum = pow(2, nlevels - 1)
@@ -748,15 +820,30 @@ def build_octree_from_tiff_slices():
                     for x in range(1, bnum+1):
                         coord_list.append((z,y,x))
                         if len(coord_list) >= batch_block_num:
-                            future = dask.delayed(save_block_from_slices_batch)(coord_list, indirs[i], chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry)
+                            future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry)
                             futures.append(future)
                             coord_list = []
                 if len(coord_list) > 0:
-                    future = dask.delayed(save_block_from_slices_batch)(coord_list, indirs[i], chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry)
+                    future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry)
                     futures.append(future)
             with ProgressBar():
                 dask.compute(futures)
             ch_ids.append(ch+i)
+            print("done")
+
+            #delete temporary files
+            if delete_tmpfiles:
+                print("deleting temporary files...")
+                dlist = [entry.path for entry in scantree(tmpdir)]
+                chunked_del_list = np.array_split(dlist, task_num)
+                futures = []
+                for dlist in chunked_del_list:
+                    future = dask.delayed(delete_files)(dlist)
+                    futures.append(future)
+                with ProgressBar():
+                    dask.compute(futures)
+                print("done")
+
     elif len(infiles) > 0:
         adjusted = images[:dim[0], :dim[1], :dim[2]]
         volume = adjusted.rechunk(dim_leaf)
@@ -775,6 +862,7 @@ def build_octree_from_tiff_slices():
 
     #downsample
     for lv in range(nlevels-1, 0, -1):
+        print("downsampling level " + str(lv+1))
         futures = []
         bnum = pow(2, lv - 1)
         batch_block_num = (int)(bnum * bnum * bnum * len(ch_ids) / task_num)
@@ -797,10 +885,12 @@ def build_octree_from_tiff_slices():
             futures.append(future)
         with ProgressBar():
             dask.compute(futures)
+        print("done")
 
     #ktx conversion
     if args.ktx:
         for lv in range(nlevels, 0, -1):
+            print("ktx conversion level " + str(lv))
             futures = []
             bnum = pow(2, lv - 1)
             batch_block_num = (int)(bnum * bnum * bnum / task_num)
@@ -822,6 +912,13 @@ def build_octree_from_tiff_slices():
                 futures.append(future_ktx)
             with ProgressBar():
                 dask.compute(futures)
+            print("done")
+
+    try:
+        if os.path.isdir(tmpdir):
+            os.remove(tmpdir)
+    except:
+        print("could not remove the temporary directory:" + tmpdir)
 
     client.close()
 
