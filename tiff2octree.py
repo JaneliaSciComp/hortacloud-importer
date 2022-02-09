@@ -916,7 +916,7 @@ def build_octree_from_tiff_slices():
 
     try:
         if os.path.isdir(tmpdir):
-            os.remove(tmpdir)
+            os.rmdir(tmpdir)
     except:
         print("could not remove the temporary directory:" + tmpdir)
 
