@@ -25,7 +25,8 @@ import dask.array as da
 import dask.bag as db
 import dask.dataframe as dd
 import dask_image.imread
-from dask.distributed import Client, progress
+from dask.distributed import Client, Variable
+from distributed.diagnostics.progressbar import progress
 from dask.diagnostics import ProgressBar, Profiler, ResourceProfiler, CacheProfiler, visualize
 import numpy as np
 import pandas as pd
@@ -37,7 +38,7 @@ from distributed import LocalCluster
 from tifffile import TiffFile
 from multiprocessing.pool import ThreadPool
 
-from shutil import which, copyfile
+from shutil import which, copyfile, rmtree
 from typing import Union, List, Dict, Any, Optional
 import warnings
 
@@ -205,181 +206,6 @@ def get_cluster(
 
     return cluster
 
-def get_crop_from_tiled_tif(page, i0, j0, h, w):
-    """Extract a crop from a TIFF image file directory (IFD).
-    
-    Only the tiles englobing the crop area are loaded and not the whole page.
-    This is usefull for large Whole slide images that can't fit int RAM.
-    Parameters
-    ----------
-    page : TiffPage
-        TIFF image file directory (IFD) from which the crop must be extracted.
-    i0, j0: int
-        Coordinates of the top left corner of the desired crop.
-    h: int
-        Desired crop height.
-    w: int
-        Desired crop width.
-    Returns
-    -------
-    out : ndarray of shape (imagedepth, h, w, sampleperpixel)
-        Extracted crop.
-    """
-
-    if not page.is_tiled:
-        raise ValueError("Input page must be tiled.")
-
-    im_width = page.imagewidth
-    im_height = page.imagelength
-
-    if h < 1 or w < 1:
-        raise ValueError("h and w must be strictly positive.")
-
-    if i0 < 0 or j0 < 0 or i0 + h >= im_height or j0 + w >= im_width:
-        raise ValueError("Requested crop area is out of image bounds.")
-
-    tile_width, tile_height = page.tilewidth, page.tilelength
-    i1, j1 = i0 + h, j0 + w
-
-    tile_i0, tile_j0 = i0 // tile_height, j0 // tile_width
-    tile_i1, tile_j1 = np.ceil([i1 / tile_height, j1 / tile_width]).astype(int)
-
-    tile_per_line = int(np.ceil(im_width / tile_width))
-
-    out = np.empty((page.imagedepth,
-                    (tile_i1 - tile_i0) * tile_height,
-                    (tile_j1 - tile_j0) * tile_width,
-                    page.samplesperpixel), dtype=page.dtype)
-
-    fh = page.parent.filehandle
-
-    jpegtables = page.tags.get('JPEGTables', None)
-    if jpegtables is not None:
-        jpegtables = jpegtables.value
-
-    for i in range(tile_i0, tile_i1):
-        for j in range(tile_j0, tile_j1):
-            index = int(i * tile_per_line + j)
-
-            offset = page.dataoffsets[index]
-            bytecount = page.databytecounts[index]
-
-            fh.seek(offset)
-            data = fh.read(bytecount)
-            tile, indices, shape = page.decode(data, index, jpegtables)
-
-            im_i = (i - tile_i0) * tile_height
-            im_j = (j - tile_j0) * tile_width
-            out[:, im_i: im_i + tile_height, im_j: im_j + tile_width, :] = tile
-
-    im_i0 = i0 - tile_i0 * tile_height
-    im_j0 = j0 - tile_j0 * tile_width
-
-    return out[:, im_i0: im_i0 + h, im_j0: im_j0 + w, :]
-
-def get_untiled_crop(page, i0, j0, h, w):
-    if page.is_tiled:
-        raise ValueError("Input page must not be tiled")
-    
-    im_width = page.imagewidth
-    im_height = page.imagelength
-    
-    if h < 1 or w < 1:
-        raise ValueError("h and w must be strictly positive.")
-
-    i1, j1 = i0 + h, j0 + w
-    if i0 < 0 or j0 < 0 or i1 >= im_height or j1 >= im_width:
-        raise ValueError(f"Requested crop area is out of image bounds.{i0}_{i1}_{im_height}, {j0}_{j1}_{im_width}")
-        
-    out = np.empty((page.imagedepth, h, w, page.samplesperpixel), dtype=page.dtype)
-    fh = page.parent.filehandle
-    
-    for index in range(i0, i1):
-        offset = page.dataoffsets[index]
-        bytecount = page.databytecounts[index]
-
-        fh.seek(offset)
-        data = fh.read(bytecount)
-
-        tile, indices, shape = page.decode(data, index)
-        
-        out[:,index-i0,:,:] = tile[:,:,j0:j1,:]
-    
-    return out
-
-def get_crop_tif_stack(fpath ,s0, i0, j0, d, h, w):
-    tf = TiffFile(fpath)
-
-    out = []
-
-    for page in tf.pages:
-        if page.is_tiled:
-            out.append(get_crop_from_tiled_tif(page, i0, j0, h, w))
-        else:
-            out.append(get_untiled_crop(page, i0, j0, h, w))
-    return out
-
-# 2nd brightest of the 8 pixels
-# equivalent to sort(vec(arg))[7] but half the time and a third the memory usage
-def downsampling_function(view):
-    m0 = 0
-    m1 = 0
-    for z in range(0, 2):
-        for y in range(0, 2):
-            for x in range(0, 2):
-                tmp = view[z, y, x]
-                if tmp > m0:
-                    m1 = m0
-                    m0 = tmp
-                elif tmp > m1:
-                    m1 = tmp
-    return m1
-
-def downsample(out_tile_jl, coord, shape_leaf_px, scratch):
-    iy = ((coord - 1) >> 1) & 1 * shape_leaf_px[1] >> 1
-    ix = ((coord - 1) >> 0) & 1 * shape_leaf_px[2] >> 1
-    iz = ((coord - 1) >> 2) & 1 * shape_leaf_px[3] >> 1
-    for z in range(1, shape_leaf_px[3] - 1, 2):
-        tmpz = iz + (z + 1) >> 1
-        for x in range(1, shape_leaf_px[2] - 1, 2):
-            tmpx = ix + (x + 1) >> 1
-            for y in range(1, shape_leaf_px[1] - 1, 2):
-                tmpy = iy + (y + 1) >> 1
-                out_tile_jl[tmpy, tmpx, tmpz] = downsampling_function(scratch[y:y + 1, x:x + 1, z:z + 1])
-
-def save_data(path, image):
-    skimage.io.imsave(path, image)
-
-def octree_division(jobs, ch, nlevels, targetpath, dim_leaf, relpath, img_view):
-        morton = relpath.split(os.path.sep)
-        level = 1 if relpath == "" else (morton.length + 1)
-        print("Level: "+str(level)+", Current path: "+str(targetpath)+"/"+str(relpath))
-        Path(os.path.join(targetpath, relpath)).mkdir(parents=True, exist_ok=True)
-        if level < nlevels:
-            img_down_next = np.zeros((3, 2))
-            dim_view = np.array([img_view[0][1] - img_view[0][0], img_view[1][1] - img_view[1][0], img_view[2][1] - img_view[2][0]])
-            for z in range(1,3):
-                for y in range(1,3):
-                    for x in range(1,3):
-                        octant_path = str((x + 2 * (y - 1) + 4 * (z - 1)))
-                        start_x = 1 if x == 1 else dim_view[2] >> 1 + 1
-                        end_x = dim_view[2] >> 1 if x == 1 else dim_view[2]
-                        start_y = 1 if y == 1 else dim_view[1] >> 1 + 1
-                        end_y = dim_view[1] >> 1 if y == 1 else dim_view[1]
-                        start_z = 1 if z == 1 else dim_view[3] >> 1 + 1
-                        end_z = dim_view[3] >> 1 if z == 1 else dim_view[3]
-      
-            print("octant:({0},{1},{2}) -> {3}/{4} ({5}:{6}, {7}:{8}, {9}:{10})".format(x, y, z, relpath, octant_path, start_x, end_x, start_y, end_y, start_z, end_z))
-            new_view = np.array([start_x, end_x], [start_y, end_y], [start_z, end_z])
-            octree_division(jobs, ch, targetpath, os.path.join(relpath, octant_path), new_view)
-        
-        saveme = img_view if level == nlevels else img_down_next
-        filename = "default.{0}.tif".format(ch)
-        save_data(os.path.join(targetpath, relpath, filename), saveme)
-        if (level > 1):
-            downsample(os.path.join(targetpath, relpath, filename), dim_leaf, saveme)
-
-
 def downsample_2ndmax(out_tile_jl, coord, shape_leaf_px, scratch):
     ix = (((coord - 1) >> 0) & 1) * shape_leaf_px[2] >> 1
     iy = (((coord - 1) >> 1) & 1) * shape_leaf_px[1] >> 1
@@ -512,15 +338,15 @@ def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, typ
 
     skimage.io.imsave(full_path, img_down, compress=6)
 
-def convert_block_ktx_batch(chunk_coords, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir):
+def convert_block_ktx_batch(chunk_coords, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source):
     for pos in chunk_coords:
-        convert_block_ktx(pos, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir)
+        convert_block_ktx(pos, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source)
 
-def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir):
+def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source):
 
     relpath = get_octree_relative_path(chunk_coord, level)
+    dir_path = os.path.join(target_path, relpath)
     if make_dir:
-        dir_path = os.path.join(target_path, relpath)
         Path(dir_path).mkdir(parents=True, exist_ok=True)
 
     octree_path0 = relpath.split(os.path.sep)
@@ -550,11 +376,15 @@ def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_i
         if file_size > 0:
             print("Skipping existing file")
             return
-    f = open(full_file, 'wb')
+
     try:
+        f = open(full_file, 'wb')
         block.write_ktx_file(f)
         f.flush()
         f.close()
+        if delete_source:
+            for fpath in glob.glob(os.path.join(dir_path, 'default.[0-9].tif')):
+                os.remove(fpath)
     except:
         print("Error writing file %s" % full_file)
         f.flush()
@@ -616,7 +446,7 @@ def build_octree_from_tiff_slices():
     parser.add_argument("-t", "--thread", dest="number", type=int, default=16, help="number of threads")
     parser.add_argument("-i", "--inputdir", dest="input", type=str, default="", help="input directories")
     parser.add_argument("-f", "--inputfile", dest="file", type=str, default="", help="input image stacks")
-    parser.add_argument("-o", "--output", dest="output", type=str, default="", help="output directory")
+    parser.add_argument("-o", "--output", dest="output", type=str, default=None, help="output directory")
     parser.add_argument("-l", "--level", dest="level", type=int, default=1, help="number of levels")
     parser.add_argument("-c", "--channel", dest="channel", type=int, default=0, help="channel id")
     parser.add_argument("-d", "--downsample", dest="downsample", type=str, default='area', help="downsample method: 2ndmax, area, aa (anti-aliasing)")
@@ -630,6 +460,7 @@ def build_octree_from_tiff_slices():
     parser.add_argument("--maxbatch", dest="maxbatch", type=int, default=0, help="number of blocks per job")
     parser.add_argument("--lsf", dest="lsf", default=False, action="store_true", help="use LSF cluster")
     parser.add_argument("--ktx", dest="ktx", default=False, action="store_true", help="generate ktx files")
+    parser.add_argument("--ktxonly", dest="ktxonly", default=False, action="store_true", help="output only a ktx octree")
     parser.add_argument("--ktxout", dest="ktxout", type=str, default=None, help="output directory for a ktx octree")
     parser.add_argument("--cluster", dest="cluster", type=str, default=None, help="address of a dask scheduler server")
     parser.add_argument("--dry", dest="dry", default=False, action="store_true", help="dry run")
@@ -649,7 +480,18 @@ def build_octree_from_tiff_slices():
     dmethod = args.downsample
     monitoring = args.monitor
     ktxout = args.ktxout
+    ktxonly = args.ktxonly
     ktx_mkdir = False
+
+    if ktxout and not outdir:
+        ktxonly = True
+
+    if ktxonly:
+        print("output only ktx octree")
+        if not ktxout:
+            ktxout = outdir
+        else:
+            outdir = ktxout
 
     tmpdir_name = "tmp"
     tmpdir = os.path.join(outdir, tmpdir_name)
@@ -734,7 +576,6 @@ def build_octree_from_tiff_slices():
 
     ranges = [(c, c+dim_leaf[0]) for c in range(0,dim[0],dim_leaf[0])]
 
-
     ostr = args.origin.split(",")
     o = []
     if len(ostr) > 0:
@@ -791,7 +632,8 @@ def build_octree_from_tiff_slices():
 
             #tiff-to-tiled-tiff conversion
             delete_tmpfiles = False
-            if im_width >= 4096:
+            print("imwidth: "+str(im_width))
+            if im_width >= 8192:
                 print("tiff-to-tiled-tiff conversion")
                 delete_tmpfiles = True
                 Path(tmpdir).mkdir(parents=True, exist_ok=True)
@@ -904,11 +746,11 @@ def build_octree_from_tiff_slices():
                     for x in range(1, bnum+1):
                         coord_list.append((z,y,x))
                         if len(coord_list) >= batch_block_num:
-                            future_ktx = dask.delayed(convert_block_ktx_batch)(coord_list, outdir, ktxout, lv, True, True, ktx_mkdir if lv == nlevels else False)
+                            future_ktx = dask.delayed(convert_block_ktx_batch)(coord_list, outdir, ktxout, lv, True, True, ktx_mkdir if lv == nlevels else False, ktxonly)
                             futures.append(future_ktx)
                             coord_list = []
             if len(coord_list) > 0:
-                future_ktx = dask.delayed(convert_block_ktx_batch)(coord_list, outdir, ktxout, lv, True, True, ktx_mkdir if lv == nlevels else False)
+                future_ktx = dask.delayed(convert_block_ktx_batch)(coord_list, outdir, ktxout, lv, True, True, ktx_mkdir if lv == nlevels else False, ktxonly)
                 futures.append(future_ktx)
             with ProgressBar():
                 dask.compute(futures)
@@ -916,7 +758,7 @@ def build_octree_from_tiff_slices():
 
     try:
         if os.path.isdir(tmpdir):
-            os.rmdir(tmpdir)
+            rmtree(tmpdir)
     except:
         print("could not remove the temporary directory:" + tmpdir)
 
