@@ -40,10 +40,19 @@ commandline arguments:
   --ktx                 generate ktx files
   --ktxout KTXOUT       output directory for a ktx octree
   --cluster CLUSTER     address of a dask scheduler server
-  
+
+
 examples: 
+
+1. use a local cluster.
 python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area
+
+2. use a LSF cluster.
 python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area --lsf --project scicompsoft --memory 12GB --maxjobs 10
-python3 tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 -o /output/octree --ktx --ktxout /output/octree/ktx
+
+3. output a ktx octree without a tiff octree.
+python3 tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 --ktx --ktxout /output/octree/ktx
+
+4. specify a cluster by an address.
 python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree --cluster tcp://10.60.0.223:8786
 ```
