@@ -351,9 +351,9 @@ def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_i
 
     octree_path0 = relpath.split(os.path.sep)
     octree_path = []
-    for level in octree_path0:
-        if re.match(r'[1-8]', level):
-            octree_path.append(int(level))
+    for level_str in octree_path0:
+        if re.match(r'[1-8]', level_str):
+            octree_path.append(int(level_str))
     
     o = RenderedMouseLightOctree(input_folder=source_path, downsample_intensity=downsample_intensity, downsample_xy=downsample_xy)
     block = RenderedTiffBlock(o.input_folder, o, octree_path)
@@ -382,14 +382,19 @@ def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_i
         block.write_ktx_file(f)
         f.flush()
         f.close()
-        if delete_source:
-            for fpath in glob.glob(os.path.join(dir_path, 'default.[0-9].tif')):
-                os.remove(fpath)
-    except:
+    except BaseException as err:
+        print(err)
         print("Error writing file %s" % full_file)
         f.flush()
         f.close()
         os.unlink(f.name)
+
+    if delete_source and level > 1:
+        try:
+            for fpath in glob.glob(os.path.join(dir_path, 'default.[0-9].tif')):
+                os.remove(fpath)
+        except BaseException as err:
+            print(err)
 
 def conv_tiled_tiff(input, output, tilesize):
     if not os.path.exists(input):
@@ -481,10 +486,17 @@ def build_octree_from_tiff_slices():
     monitoring = args.monitor
     ktxout = args.ktxout
     ktxonly = args.ktxonly
+    ktx = args.ktx
     ktx_mkdir = False
 
     if ktxout and not outdir:
         ktxonly = True
+
+    if ktxout or ktxonly:
+        ktx = True
+
+    if ktx and not ktxout:
+        ktxout = outdir
 
     if ktxonly:
         print("output only ktx octree")
@@ -493,15 +505,20 @@ def build_octree_from_tiff_slices():
         else:
             outdir = ktxout
 
+    if ktx:
+        ktxroot = ktxout
+        ktxout = os.path.join(ktxout, "ktx")
+
+    if ktxonly:
+        outdir = ktxout
+    
+    if ktx and outdir != ktxout:
+        ktx_mkdir = True
+
     tmpdir_name = "tmp"
     tmpdir = os.path.join(outdir, tmpdir_name)
 
     maxbatch = args.maxbatch
-
-    if not ktxout:
-        ktxout = outdir
-    else:
-        ktx_mkdir = True
 
     my_lsf_kwargs={}
     if args.memory:
@@ -615,13 +632,18 @@ def build_octree_from_tiff_slices():
     l.append("sz: " + str(dim[2] * vs[2]))
     l.append("nl: " + str(nlevels))
 
+    Path(outdir).mkdir(parents=True, exist_ok=True)
     tr_path = os.path.join(outdir, "transform.txt")
     with open(tr_path, mode='w') as f:
         f.write('\n'.join(l))
 
-    if ktx_mkdir and outdir != ktxout:
-        Path(ktxout).mkdir(parents=True, exist_ok=True)
-        copyfile(tr_path, os.path.join(ktxout, "transform.txt"))
+    if ktx:
+        if outdir != ktxroot:
+            Path(ktxroot).mkdir(parents=True, exist_ok=True)
+            copyfile(tr_path, os.path.join(ktxroot, "transform.txt"))
+        if outdir != ktxout:
+            Path(ktxout).mkdir(parents=True, exist_ok=True)
+            copyfile(tr_path, os.path.join(ktxout, "transform.txt"))
 
     #initial
     if len(indirs) > 0:
@@ -730,7 +752,7 @@ def build_octree_from_tiff_slices():
         print("done")
 
     #ktx conversion
-    if args.ktx:
+    if ktx:
         for lv in range(nlevels, 0, -1):
             print("ktx conversion level " + str(lv))
             futures = []
@@ -755,6 +777,14 @@ def build_octree_from_tiff_slices():
             with ProgressBar():
                 dask.compute(futures)
             print("done")
+        if ktxonly and ktxroot != outdir:
+            try:
+                for fpath in glob.glob(os.path.join(outdir, 'default.[0-9].tif')):
+                    fname = os.path.basename(fpath)
+                    copyfile(fpath, os.path.join(ktxroot, fname))
+                    os.remove(fpath)
+            except BaseException as err:
+                print(err)
 
     try:
         if os.path.isdir(tmpdir):
