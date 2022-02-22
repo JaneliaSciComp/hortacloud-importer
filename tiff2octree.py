@@ -336,7 +336,10 @@ def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, typ
 
     print(full_path)
 
-    skimage.io.imsave(full_path, img_down, compress=6)
+    if level > 1:
+        skimage.io.imsave(full_path, img_down, compress=6)
+    else:
+        skimage.io.imsave(full_path, img_down)
 
 def convert_block_ktx_batch(chunk_coords, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source):
     for pos in chunk_coords:
