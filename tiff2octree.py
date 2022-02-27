@@ -599,7 +599,7 @@ def build_octree_from_tiff_slices():
     ostr = args.origin.split(",")
     o = []
     if len(ostr) > 0:
-        o.append(ostr[0])
+        o.append(ostr[2])
     else:
         o.append("0.0")
     if len(ostr) > 1:
@@ -607,14 +607,14 @@ def build_octree_from_tiff_slices():
     else:
         o.append("0.0")
     if len(ostr) > 2:
-        o.append(ostr[2])
+        o.append(ostr[0])
     else:
         o.append("0.0")
 
     vsstr = args.voxsize.split(",")
     vs = []
     if len(vsstr) > 0:
-        vs.append(float(vsstr[0]))
+        vs.append(float(vsstr[2]))
     else:
         vs.append(1.0)
     if len(vsstr) > 1:
@@ -622,17 +622,17 @@ def build_octree_from_tiff_slices():
     else:
         vs.append(1.0)
     if len(vsstr) > 2:
-        vs.append(float(vsstr[2]))
+        vs.append(float(vsstr[0]))
     else:
         vs.append(1.0)
 
     l = []
-    l.append("ox: " + o[0])
+    l.append("ox: " + o[2])
     l.append("oy: " + o[1])
-    l.append("oz: " + o[2])
-    l.append("sx: " + str(dim[0] * vs[0]))
-    l.append("sy: " + str(dim[1] * vs[1]))
-    l.append("sz: " + str(dim[2] * vs[2]))
+    l.append("oz: " + o[0])
+    l.append("sx: " + '{:.14g}'.format(dim[2] * vs[2]))
+    l.append("sy: " + '{:.14g}'.format(dim[1] * vs[1]))
+    l.append("sz: " + '{:.14g}'.format(dim[0] * vs[0]))
     l.append("nl: " + str(nlevels))
 
     Path(outdir).mkdir(parents=True, exist_ok=True)
