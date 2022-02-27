@@ -269,11 +269,11 @@ def get_cropped_image_rasterio(file_paths, z0, y0, x0, d, h, w, type):
                 print(err)
     return output
 
-def save_block_from_slices_batch(chunk_coords, file_paths, target_path, nlevels, dim_leaf, ch, type, dry):
+def save_block_from_slices_batch(chunk_coords, file_paths, target_path, nlevels, dim_leaf, ch, type, dry, resolutions):
     for pos in chunk_coords:
-        save_block_from_slices(pos, file_paths, target_path, nlevels, dim_leaf, ch, type, dry)
+        save_block_from_slices(pos, file_paths, target_path, nlevels, dim_leaf, ch, type, dry, resolutions)
 
-def save_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_leaf, ch, type, dry):
+def save_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_leaf, ch, type, dry, resolutions):
     relpath = get_octree_relative_path(chunk_coord, nlevels)
 
     dir_path = os.path.join(target_path, relpath)
@@ -309,11 +309,11 @@ def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
 
     return np.array(block_id[0])[None, None, None] if block_id != None else np.array(0)[None, None, None]
 
-def downsample_and_save_block_batch(chunk_coords, target_path, level, dim_leaf, ch, type, downsampling_method):
+def downsample_and_save_block_batch(chunk_coords, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions):
     for pos in chunk_coords:
-        downsample_and_save_block(pos, target_path, level, dim_leaf, ch, type, downsampling_method)
+        downsample_and_save_block(pos, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions)
 
-def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, type, downsampling_method):
+def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions):
 
     relpath = get_octree_relative_path(chunk_coord, level)
 
@@ -359,7 +359,7 @@ def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_i
             octree_path.append(int(level_str))
     
     o = RenderedMouseLightOctree(input_folder=source_path, downsample_intensity=downsample_intensity, downsample_xy=downsample_xy)
-    block = RenderedTiffBlock(o.input_folder, o, octree_path)
+    block = RenderedTiffBlock(os.path.join(source_path, relpath), o, octree_path)
     
     file_name = 'block'
     if downsample_intensity:
@@ -687,11 +687,11 @@ def build_octree_from_tiff_slices():
                     for x in range(1, bnum+1):
                         coord_list.append((z,y,x))
                         if len(coord_list) >= batch_block_num:
-                            future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry)
+                            future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry, vs)
                             futures.append(future)
                             coord_list = []
                 if len(coord_list) > 0:
-                    future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry)
+                    future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry, vs)
                     futures.append(future)
             with ProgressBar():
                 dask.compute(futures)
@@ -738,17 +738,18 @@ def build_octree_from_tiff_slices():
         if batch_block_num < 1: 
             batch_block_num = 1
         coord_list = []
+        vs = [r * 2 for r in vs]
         for z in range(1, bnum+1):
             for y in range(1, bnum+1):
                 for x in range(1, bnum+1):
                     for c in ch_ids:
                         coord_list.append((z,y,x))
                         if len(coord_list) >= batch_block_num:
-                            future = dask.delayed(downsample_and_save_block_batch)(coord_list, outdir, lv, dim_leaf, c, volume_dtype, dmethod)
+                            future = dask.delayed(downsample_and_save_block_batch)(coord_list, outdir, lv, dim_leaf, c, volume_dtype, dmethod, vs)
                             futures.append(future)
                             coord_list = []
         if len(coord_list) > 0:
-            future = dask.delayed(downsample_and_save_block_batch)(coord_list, outdir, lv, dim_leaf, c, volume_dtype, dmethod)
+            future = dask.delayed(downsample_and_save_block_batch)(coord_list, outdir, lv, dim_leaf, c, volume_dtype, dmethod, vs)
             futures.append(future)
         with ProgressBar():
             dask.compute(futures)
