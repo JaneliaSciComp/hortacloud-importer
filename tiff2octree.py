@@ -630,9 +630,9 @@ def build_octree_from_tiff_slices():
     l.append("ox: " + o[2])
     l.append("oy: " + o[1])
     l.append("oz: " + o[0])
-    l.append("sx: " + '{:.14g}'.format(dim[2] * vs[2]))
-    l.append("sy: " + '{:.14g}'.format(dim[1] * vs[1]))
-    l.append("sz: " + '{:.14g}'.format(dim[0] * vs[0]))
+    l.append("sx: " + '{:.14g}'.format(vs[2] * 1000))
+    l.append("sy: " + '{:.14g}'.format(vs[1] * 1000))
+    l.append("sz: " + '{:.14g}'.format(vs[0] * 1000))
     l.append("nl: " + str(nlevels))
 
     Path(outdir).mkdir(parents=True, exist_ok=True)
