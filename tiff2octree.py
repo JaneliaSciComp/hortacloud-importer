@@ -257,39 +257,40 @@ def get_octree_relative_path(chunk_coord, level):
     
     return relpath
 
-def get_cropped_image_rasterio(file_paths, z0, y0, x0, d, h, w, type):
+def get_cropped_image_rasterio(file_paths, z0, y0, x0, d, h, w, type, ch):
     output = np.zeros((d, h, w), dtype=type)
     for i in range(z0, z0 + d):
         if i - z0 < len(file_paths):
             try:
                 with rasterio.open(file_paths[i - z0]) as src:
-                    data = src.read(1, window=Window(x0, y0, w, h))
+                    data = src.read(ch+1, window=Window(x0, y0, w, h))
                     output[i - z0, :h, :w] = data[:, :]
             except BaseException as err:
                 print(err)
     return output
 
-def save_block_from_slices_batch(chunk_coords, file_paths, target_path, nlevels, dim_leaf, ch, type, dry, resolutions):
+def save_block_from_slices_batch(chunk_coords, file_paths, target_path, nlevels, dim_leaf, ch, type, dry, resolutions, chnum):
     for pos in chunk_coords:
-        save_block_from_slices(pos, file_paths, target_path, nlevels, dim_leaf, ch, type, dry, resolutions)
+        save_block_from_slices(pos, file_paths, target_path, nlevels, dim_leaf, ch, type, dry, resolutions, chnum)
 
-def save_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_leaf, ch, type, dry, resolutions):
+def save_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_leaf, ch, type, dry, resolutions, chnum):
     relpath = get_octree_relative_path(chunk_coord, nlevels)
 
     dir_path = os.path.join(target_path, relpath)
-    full_path = os.path.join(dir_path, "default.{0}.tif".format(ch))
+    for ch in range(ch + chnum):
+        full_path = os.path.join(dir_path, "default.{0}.tif".format(ch))
 
-    if dry:
-        print(full_path)
-        return
+        if dry:
+            print(full_path)
+            continue
 
-    #print((dim_leaf[0]*chunk_coord[0], dim_leaf[1]*chunk_coord[1], dim_leaf[2]*chunk_coord[2]))
+        #print((dim_leaf[0]*chunk_coord[0], dim_leaf[1]*chunk_coord[1], dim_leaf[2]*chunk_coord[2]))
 
-    img_data = get_cropped_image_rasterio(file_paths, dim_leaf[0]*(chunk_coord[0]-1), dim_leaf[1]*(chunk_coord[1]-1), dim_leaf[2]*(chunk_coord[2]-1), dim_leaf[0], dim_leaf[1], dim_leaf[2], type)
+        img_data = get_cropped_image_rasterio(file_paths, dim_leaf[0]*(chunk_coord[0]-1), dim_leaf[1]*(chunk_coord[1]-1), dim_leaf[2]*(chunk_coord[2]-1), dim_leaf[0], dim_leaf[1], dim_leaf[2], type, ch)
     
-    print(full_path)
-    Path(dir_path).mkdir(parents=True, exist_ok=True)
-    skimage.io.imsave(full_path, img_data, compress=6)
+        print(full_path)
+        Path(dir_path).mkdir(parents=True, exist_ok=True)
+        skimage.io.imsave(full_path, img_data, compress=6)
 
 
 def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
@@ -563,16 +564,30 @@ def build_octree_from_tiff_slices():
     dim = None
     volume_dtype = None
     if len(indirs) > 0 and indirs[0]:
-        tif_files = [os.path.join(indirs[0], f) for f in os.listdir(indirs[0]) if f.endswith('.tif')]
-        tif_files.sort()
+        img_files = [os.path.join(indirs[0], f) for f in os.listdir(indirs[0]) if f.endswith('.tif') or f.endswith('.jp2')]
+        img_files.sort()
         im_width = 0
         im_height = 0
-        with TiffFile(tif_files[0]) as tif:
-            im_width = tif.pages[0].imagewidth
-            im_height = tif.pages[0].imagelength
-            print(tif.pages[0].dtype)
-            volume_dtype = tif.pages[0].dtype
-        dim = np.asarray((len(tif_files), im_height, im_width))
+        im_chnum = 1
+        try_tiled_tif_conversion = False
+        if img_files[0].endswith('.tif'):
+            with TiffFile(img_files[0]) as tif:
+                im_width = tif.pages[0].imagewidth
+                im_height = tif.pages[0].imagelength
+                print(tif.pages[0].dtype)
+                volume_dtype = tif.pages[0].dtype
+                try_tiled_tif_conversion = True
+        elif img_files[0].endswith('.jp2'):
+            try:
+                with rasterio.open(img_files[0]) as src:
+                    im_width = src.width
+                    im_height = src.height
+                    im_chnum = src.count
+                    volume_dtype = src.dtypes[0]
+                    try_tiled_tif_conversion = False
+            except BaseException as err:
+                print(err)
+        dim = np.asarray((len(img_files), im_height, im_width))
     elif len(infiles) > 0 and infiles[0]:
         images = dask_image.imread.imread(infiles[0])
         dim = np.asarray(images.shape)
@@ -583,6 +598,8 @@ def build_octree_from_tiff_slices():
     
     print("Will generate octree with " + str(nlevels) +" levels to " + str(outdir))
     print("Image dimensions: " + str(dim))
+    print("Image type: " + str(volume_dtype))
+    print("samples per pixel: " + str(im_chnum))
     
     while(dim[0] % pow(2, nlevels) > 0):
         dim[0] -= 1
@@ -648,32 +665,37 @@ def build_octree_from_tiff_slices():
             Path(ktxout).mkdir(parents=True, exist_ok=True)
             copyfile(tr_path, os.path.join(ktxout, "transform.txt"))
 
+    if im_chnum > 1:
+        indirs = [indirs[0]]
+        ch_ids = [ch+i for i in range(0, im_chnum)]
+    else:
+        ch_ids = [ch+i for i in range(0, len(indirs))]
+
     #initial
     if len(indirs) > 0:
-        ch_ids = []
         for i in range(0, len(indirs)):
             if i > 0:
-                tif_files = [os.path.join(indirs[i], f) for f in os.listdir(indirs[i]) if f.endswith('.tif')]
+                img_files = [os.path.join(indirs[i], f) for f in os.listdir(indirs[i]) if f.endswith('.tif') or f.endswith('.jp2')]
 
             #tiff-to-tiled-tiff conversion
             delete_tmpfiles = False
             print("imwidth: "+str(im_width))
-            if im_width >= 8192:
+            if try_tiled_tif_conversion and im_width >= 8192:
                 print("tiff-to-tiled-tiff conversion")
                 delete_tmpfiles = True
                 Path(tmpdir).mkdir(parents=True, exist_ok=True)
-                chunked_tif_list = np.array_split(tif_files, task_num)
+                chunked_tif_list = np.array_split(img_files, task_num)
                 futures = []
                 for tlist in chunked_tif_list:
                     future = dask.delayed(conv_tiled_tiffs)(tlist, tmpdir, (256, 256))
                     futures.append(future)
                 with ProgressBar():
                     results = dask.compute(futures)
-                    tif_files = [item for sublist in results[0] for item in sublist]
+                    img_files = [item for sublist in results[0] for item in sublist]
                 print("done")
 
             print("writing the highest level")
-            chunked_list = [tif_files[j:j+dim_leaf[0]] for j in range(0, len(tif_files), dim_leaf[0])]
+            chunked_list = [img_files[j:j+dim_leaf[0]] for j in range(0, len(img_files), dim_leaf[0])]
             futures = []
             bnum = pow(2, nlevels - 1)
             for z in range(1, bnum+1):
@@ -687,15 +709,21 @@ def build_octree_from_tiff_slices():
                     for x in range(1, bnum+1):
                         coord_list.append((z,y,x))
                         if len(coord_list) >= batch_block_num:
-                            future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry, vs)
+                            if im_chnum == 0:
+                                future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry, vs, im_chnum)
+                            else:
+                                future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch, volume_dtype, args.dry, vs, im_chnum)
                             futures.append(future)
                             coord_list = []
                 if len(coord_list) > 0:
-                    future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry, vs)
+                    if im_chnum == 0:
+                        future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry, vs, im_chnum)
+                    else:
+                        future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch, volume_dtype, args.dry, vs, im_chnum)
                     futures.append(future)
             with ProgressBar():
                 dask.compute(futures)
-            ch_ids.append(ch+i)
+
             print("done")
 
             #delete temporary files
@@ -711,7 +739,7 @@ def build_octree_from_tiff_slices():
                     dask.compute(futures)
                 print("done")
 
-    elif len(infiles) > 0:
+    elif len(infiles) > 0: #tif stack
         adjusted = images[:dim[0], :dim[1], :dim[2]]
         volume = adjusted.rechunk(dim_leaf)
         volume.map_blocks(save_block, outdir, nlevels, dim_leaf, ch, chunks=(1,1,1)).compute()
