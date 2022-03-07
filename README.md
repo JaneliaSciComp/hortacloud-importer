@@ -25,7 +25,7 @@ commandline arguments:
   -o OUTPUT, --output OUTPUT              output directory
   -l LEVEL, --level LEVEL                 number of levels
   -c CHANNEL, --channel CHANNEL           channel id
-  -d DOWNSAMPLE, --downsample DOWNSAMPLE  downsampling method: 2ndmax, area, aa (anti-aliasing)
+  -d DOWNSAMPLE, --downsample DOWNSAMPLE  downsampling method: 2ndmax, area, aa (anti-aliasing), spline
   -m, --monitor                           activate monitoring. 
                                           you can see the dask dashboard at 
                                           http://(NodeName).int.janelia.org:8989/status

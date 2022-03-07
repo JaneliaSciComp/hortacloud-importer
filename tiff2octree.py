@@ -49,6 +49,8 @@ from ktx.octree.ktx_from_rendered_tiff import RenderedMouseLightOctree, Rendered
 import rasterio
 from rasterio.windows import Window
 
+from scipy import ndimage
+
 dask.config.set({"jobqueue.lsf.use-stdin": True})
 
 threading_env_vars = [
@@ -206,6 +208,22 @@ def get_cluster(
 
     return cluster
 
+# 2nd brightest of the 8 pixels
+# equivalent to sort(vec(arg))[7] but half the time and a third the memory usage
+def downsampling_function(view):
+    m0 = 0
+    m1 = 0
+    for z in range(0, 2):
+        for y in range(0, 2):
+            for x in range(0, 2):
+                tmp = view[z, y, x]
+                if tmp > m0:
+                    m1 = m0
+                    m0 = tmp
+                elif tmp > m1:
+                    m1 = tmp
+    return m1
+
 def downsample_2ndmax(out_tile_jl, coord, shape_leaf_px, scratch):
     ix = (((coord - 1) >> 0) & 1) * shape_leaf_px[2] >> 1
     iy = (((coord - 1) >> 1) & 1) * shape_leaf_px[1] >> 1
@@ -242,6 +260,16 @@ def downsample_area(out_tile_jl, coord, shape_leaf_px, scratch):
     down_img = downscale_local_mean(scratch, (2, 2 ,2))
     out_tile_jl[iz:izz, iy:iyy, ix:ixx] = down_img.astype(scratch.dtype)
 
+def downsample_spline3(out_tile_jl, coord, shape_leaf_px, scratch):
+    ix = (((coord - 1) >> 0) & 1) * shape_leaf_px[2] >> 1
+    iy = (((coord - 1) >> 1) & 1) * shape_leaf_px[1] >> 1
+    iz = (((coord - 1) >> 2) & 1) * shape_leaf_px[0] >> 1
+    ixx = ix+(shape_leaf_px[2] >> 1)
+    iyy = iy+(shape_leaf_px[1] >> 1)
+    izz = iz+(shape_leaf_px[0] >> 1)
+    down_img = ndimage.zoom(scratch, 0.5)
+    out_tile_jl[iz:izz, iy:iyy, ix:ixx] = down_img.astype(scratch.dtype)
+
 def get_octree_relative_path(chunk_coord, level):
     relpath = ''
     pos = np.asarray(chunk_coord)
@@ -273,12 +301,12 @@ def save_block_from_slices_batch(chunk_coords, file_paths, target_path, nlevels,
     for pos in chunk_coords:
         save_block_from_slices(pos, file_paths, target_path, nlevels, dim_leaf, ch, type, dry, resolutions, chnum)
 
-def save_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_leaf, ch, type, dry, resolutions, chnum):
+def save_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_leaf, chid, type, dry, resolutions, chnum):
     relpath = get_octree_relative_path(chunk_coord, nlevels)
 
     dir_path = os.path.join(target_path, relpath)
-    for ch in range(ch + chnum):
-        full_path = os.path.join(dir_path, "default.{0}.tif".format(ch))
+    for ch in range(chnum):
+        full_path = os.path.join(dir_path, "default.{0}.tif".format(chid+ch))
 
         if dry:
             print(full_path)
@@ -330,6 +358,8 @@ def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, typ
             downsample_area(img_down, oct, dim_leaf, scratch)
         elif downsampling_method == 'aa':
             downsample_aa(img_down, oct, dim_leaf, scratch)
+        elif downsampling_method == 'spline':
+            downsample_spline3(img_down, oct, dim_leaf, scratch)
         else:
             downsample_2ndmax(img_down, oct, dim_leaf, scratch)
 
@@ -458,7 +488,7 @@ def build_octree_from_tiff_slices():
     parser.add_argument("-o", "--output", dest="output", type=str, default=None, help="output directory")
     parser.add_argument("-l", "--level", dest="level", type=int, default=1, help="number of levels")
     parser.add_argument("-c", "--channel", dest="channel", type=int, default=0, help="channel id")
-    parser.add_argument("-d", "--downsample", dest="downsample", type=str, default='area', help="downsample method: 2ndmax, area, aa (anti-aliasing)")
+    parser.add_argument("-d", "--downsample", dest="downsample", type=str, default='area', help="downsample method: 2ndmax, area, aa(anti-aliasing), spline")
     parser.add_argument("-m", "--monitor", dest="monitor", default=False, action="store_true", help="activate monitoring")
     parser.add_argument("--origin", dest="origin", type=str, default="0,0,0", help="position of the corner of the top-level image in nanometers")
     parser.add_argument("--voxsize", dest="voxsize", type=str, default="1.0,1.0,1.0", help="voxel size of the top-level image")
@@ -709,14 +739,14 @@ def build_octree_from_tiff_slices():
                     for x in range(1, bnum+1):
                         coord_list.append((z,y,x))
                         if len(coord_list) >= batch_block_num:
-                            if im_chnum == 0:
+                            if im_chnum == 1:
                                 future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry, vs, im_chnum)
                             else:
                                 future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch, volume_dtype, args.dry, vs, im_chnum)
                             futures.append(future)
                             coord_list = []
                 if len(coord_list) > 0:
-                    if im_chnum == 0:
+                    if im_chnum == 1:
                         future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch+i, volume_dtype, args.dry, vs, im_chnum)
                     else:
                         future = dask.delayed(save_block_from_slices_batch)(coord_list, chunked_list[z-1], outdir, nlevels, dim_leaf, ch, volume_dtype, args.dry, vs, im_chnum)
