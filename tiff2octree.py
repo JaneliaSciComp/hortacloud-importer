@@ -130,7 +130,7 @@ def get_LSFCLuster(
     return cluster
 
 
-def get_LocalCluster(threads_per_worker: int = 1, n_workers: int = 0, **kwargs):
+def get_LocalCluster(threads_per_worker: int = 1, n_workers: int = 0, memory_limit: str = '16GB', **kwargs):
     """
     Creata a distributed.LocalCluster with defaults that make it more similar to a deployment on the Janelia Compute cluster.
     This function is a light wrapper around the distributed.LocalCluster constructor.
@@ -147,13 +147,14 @@ def get_LocalCluster(threads_per_worker: int = 1, n_workers: int = 0, **kwargs):
     >>> cluster = get_LocalCluster(threads_per_worker=8)
     """
     return LocalCluster(
-        n_workers=n_workers, threads_per_worker=threads_per_worker, **kwargs
+        n_workers=n_workers, threads_per_worker=threads_per_worker, memory_limit=memory_limit, **kwargs
     )
 
 
 def get_cluster(
     threads_per_worker: int = 1,
     walltime: str = "1:00",
+    local_memory_limit: str = "16GB",
     deployment: Optional[str] = None,
     local_kwargs: Dict[str, Any] = {},
     lsf_kwargs: Dict[str, Any] = {"memory": "16GB"},
@@ -200,7 +201,7 @@ def get_cluster(
                 "You requested an LSFCluster but the command `bsub` is not available."
             )
     elif deployment == "local":
-        cluster = get_LocalCluster(threads_per_worker, **local_kwargs)
+        cluster = get_LocalCluster(threads_per_worker, 0, local_memory_limit, **local_kwargs)
     else:
         raise ValueError(
             f'deployment must be one of (None, "lsf", or "local"), not {deployment}'
@@ -550,8 +551,10 @@ def build_octree_from_tiff_slices():
     maxbatch = args.maxbatch
 
     my_lsf_kwargs={}
-    if args.memory:
-       my_lsf_kwargs['memory'] = args.memory
+
+    my_lsf_kwargs['memory'] = args.memory
+    local_memory_limit = args.memory
+    
     if args.project:
        my_lsf_kwargs['project'] = args.project
     
@@ -563,7 +566,7 @@ def build_octree_from_tiff_slices():
         cluster.adapt(minimum_jobs=1, maximum_jobs = args.maxjobs)
         cluster.scale(tnum)
     else:
-        cluster = get_cluster(deployment="local")
+        cluster = get_cluster(deployment="local", local_memory_limit = local_memory_limit)
         cluster.scale(tnum)
 
     dashboard_address = None
