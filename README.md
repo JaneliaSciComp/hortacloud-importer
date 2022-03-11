@@ -3,17 +3,10 @@ a tiff-to-octree converter for dask
 
 ## Initial Setup
 1. Install miniconda (https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
-2. Run ```conda install dask```
-3. Run ```conda install dask-jobqueue -c conda-forge```
-4. Run ```conda install dask-image```
-5. Run ```conda install tifffile```
-6. Run ```conda install scikit-image```
-7. Run ```conda install -y libtiff```
-8. Run ```conda install -y pyopengl```
-9. Run ```conda install pylibtiff -c conda-forge```
-10. Run ```conda install bitarray```
-11. Run ```conda install -c conda-forge rasterio```
-
+2. Clone pyktx (https://github.com/JaneliaSciComp/pyktx)
+3. Run ```conda env create -f environment.yml```
+4. Run ```conda activate octree```
+5. Run ```pip install /path/to/pyktx```
 
 ## Usage
 ```
