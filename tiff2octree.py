@@ -236,39 +236,34 @@ def downsample_2ndmax(out_tile_jl, coord, shape_leaf_px, scratch):
                 tmpx = ix + ((x + 1) >> 1)
                 out_tile_jl[tmpz, tmpy, tmpx] = downsampling_function(scratch[z:z + 2, y:y + 2, x:x + 2])
 
-def downsample_aa(out_tile_jl, coord, shape_leaf_px, scratch):
+def get_output_bbox_for_downsampling(coord, shape_leaf_px):
     ix = (((coord - 1) >> 0) & 1) * shape_leaf_px[2] >> 1
     iy = (((coord - 1) >> 1) & 1) * shape_leaf_px[1] >> 1
     iz = (((coord - 1) >> 2) & 1) * shape_leaf_px[0] >> 1
     ixx = ix+(shape_leaf_px[2] >> 1)
     iyy = iy+(shape_leaf_px[1] >> 1)
     izz = iz+(shape_leaf_px[0] >> 1)
+
+    return np.array([[iz, iy, ix], [izz, iyy, ixx]])
+
+def downsample_aa(out_tile_jl, coord, shape_leaf_px, scratch):
+    bbox = get_output_bbox_for_downsampling(coord, shape_leaf_px)
     if scratch.dtype is np.dtype('uint8'):
-        out_tile_jl[iz:izz, iy:iyy, ix:ixx] = util.img_as_ubyte(resize(scratch, (shape_leaf_px[0]>>1, shape_leaf_px[1]>>1, shape_leaf_px[2]>>1), anti_aliasing=True))
+        out_tile_jl[bbox[0,0]:bbox[1,0], bbox[0,1]:bbox[1,1], bbox[0,2]:bbox[1,2]] = util.img_as_ubyte(resize(scratch, (shape_leaf_px[0]>>1, shape_leaf_px[1]>>1, shape_leaf_px[2]>>1), anti_aliasing=True))
     elif scratch.dtype is np.dtype('uint16'):
-        out_tile_jl[iz:izz, iy:iyy, ix:ixx] = util.img_as_uint(resize(scratch, (shape_leaf_px[0]>>1, shape_leaf_px[1]>>1, shape_leaf_px[2]>>1), anti_aliasing=True))
+        out_tile_jl[bbox[0,0]:bbox[1,0], bbox[0,1]:bbox[1,1], bbox[0,2]:bbox[1,2]] = util.img_as_uint(resize(scratch, (shape_leaf_px[0]>>1, shape_leaf_px[1]>>1, shape_leaf_px[2]>>1), anti_aliasing=True))
     elif scratch.dtype is np.dtype('float32'):
-        out_tile_jl[iz:izz, iy:iyy, ix:ixx] = util.img_as_float32(resize(scratch, (shape_leaf_px[0]>>1, shape_leaf_px[1]>>1, shape_leaf_px[2]>>1), anti_aliasing=True))
+        out_tile_jl[bbox[0,0]:bbox[1,0], bbox[0,1]:bbox[1,1], bbox[0,2]:bbox[1,2]] = util.img_as_float32(resize(scratch, (shape_leaf_px[0]>>1, shape_leaf_px[1]>>1, shape_leaf_px[2]>>1), anti_aliasing=True))
 
 def downsample_area(out_tile_jl, coord, shape_leaf_px, scratch):
-    ix = (((coord - 1) >> 0) & 1) * shape_leaf_px[2] >> 1
-    iy = (((coord - 1) >> 1) & 1) * shape_leaf_px[1] >> 1
-    iz = (((coord - 1) >> 2) & 1) * shape_leaf_px[0] >> 1
-    ixx = ix+(shape_leaf_px[2] >> 1)
-    iyy = iy+(shape_leaf_px[1] >> 1)
-    izz = iz+(shape_leaf_px[0] >> 1)
+    bbox = get_output_bbox_for_downsampling(coord, shape_leaf_px)
     down_img = downscale_local_mean(scratch, (2, 2 ,2))
-    out_tile_jl[iz:izz, iy:iyy, ix:ixx] = down_img.astype(scratch.dtype)
+    out_tile_jl[bbox[0,0]:bbox[1,0], bbox[0,1]:bbox[1,1], bbox[0,2]:bbox[1,2]] = down_img.astype(scratch.dtype)
 
 def downsample_spline3(out_tile_jl, coord, shape_leaf_px, scratch):
-    ix = (((coord - 1) >> 0) & 1) * shape_leaf_px[2] >> 1
-    iy = (((coord - 1) >> 1) & 1) * shape_leaf_px[1] >> 1
-    iz = (((coord - 1) >> 2) & 1) * shape_leaf_px[0] >> 1
-    ixx = ix+(shape_leaf_px[2] >> 1)
-    iyy = iy+(shape_leaf_px[1] >> 1)
-    izz = iz+(shape_leaf_px[0] >> 1)
+    bbox = get_output_bbox_for_downsampling(coord, shape_leaf_px)
     down_img = ndimage.zoom(scratch, 0.5)
-    out_tile_jl[iz:izz, iy:iyy, ix:ixx] = down_img.astype(scratch.dtype)
+    out_tile_jl[bbox[0,0]:bbox[1,0], bbox[0,1]:bbox[1,1], bbox[0,2]:bbox[1,2]] = down_img.astype(scratch.dtype)
 
 def get_octree_relative_path(chunk_coord, level):
     relpath = ''
@@ -677,9 +672,9 @@ def build_octree_from_tiff_slices():
     l.append("ox: " + o[2])
     l.append("oy: " + o[1])
     l.append("oz: " + o[0])
-    l.append("sx: " + '{:.14g}'.format(vs[2] * 1000))
-    l.append("sy: " + '{:.14g}'.format(vs[1] * 1000))
-    l.append("sz: " + '{:.14g}'.format(vs[0] * 1000))
+    l.append("sx: " + '{:.14g}'.format(vs[2] * 1000 * pow(2, nlevels)))
+    l.append("sy: " + '{:.14g}'.format(vs[1] * 1000 * pow(2, nlevels)))
+    l.append("sz: " + '{:.14g}'.format(vs[0] * 1000 * pow(2, nlevels)))
     l.append("nl: " + str(nlevels))
 
     Path(outdir).mkdir(parents=True, exist_ok=True)
