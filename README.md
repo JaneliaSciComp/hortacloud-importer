@@ -46,6 +46,6 @@ python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area --ls
 3. output a ktx octree without a tiff octree.
 python3 tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 --ktx --ktxout /output/octree/ktx
 
-4. specify a cluster by an address.
+4. specify a cluster by its address.
 python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree --cluster tcp://10.60.0.223:8786
 ```
