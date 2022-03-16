@@ -51,163 +51,7 @@ from rasterio.windows import Window
 
 from scipy import ndimage
 
-dask.config.set({"jobqueue.lsf.use-stdin": True})
-
-threading_env_vars = [
-    "NUM_MKL_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "OPENMP_NUM_THREADS",
-    "OMP_NUM_THREADS",
-]
-
-def make_single_threaded_env_vars(threads: int) -> List[str]:
-    return [f"export {var}={threads}" for var in threading_env_vars]
-
-
-def bsub_available() -> bool:
-    """Check if the `bsub` shell command is available
-    Returns True if the `bsub` command is available on the path, False otherwise. This is used to check whether code is
-    running on the Janelia Compute Cluster.
-    """
-    result = which("bsub") is not None
-    return result
-
-
-def get_LSFCLuster(
-    threads_per_worker: int = 1,
-    walltime: str = "1:00",
-    death_timeout: str = "600s",
-    **kwargs,
-) -> LSFCluster:
-    """Create a dask_jobqueue.LSFCluster for use on the Janelia Research Campus compute cluster.
-    This function wraps the class dask_jobqueue.LSFCLuster and instantiates this class with some sensible defaults,
-    given how the Janelia cluster is configured.
-    This function will add environment variables that prevent libraries (OPENMP, MKL, BLAS) from running multithreaded routines with parallelism
-    that exceeds the number of requested cores.
-    Additional keyword arguments added to this function will be passed to the dask_jobqueue.LSFCluster constructor.
-    Parameters
-    ----------
-    threads_per_worker: int
-        Number of cores to request from LSF. Directly translated to the `cores` kwarg to LSFCluster.
-    walltime: str
-        The expected lifetime of a worker. Defaults to one hour, i.e. "1:00"
-    cores: int
-        The number of cores to request per worker. Defaults to 1.
-    death_timeout: str
-        The duration for the scheduler to wait for workers before flagging them as dead, e.g. "600s". For jobs with a large number of workers,
-        LSF may take a long time (minutes) to request workers. This timeout value must exceed that duration, otherwise the scheduler will
-        flag these slow-to-arrive workers as unresponsive and kill them.
-    **kwargs:
-        Additional keyword arguments passed to the LSFCluster constructor
-    Examples
-    --------
-    >>> cluster = get_LSFCLuster(cores=2, project="scicompsoft", queue="normal")
-    """
-
-    if "env_extra" not in kwargs:
-        kwargs["env_extra"] = []
-
-    kwargs["env_extra"].extend(make_single_threaded_env_vars(threads_per_worker))
-
-    USER = os.environ["USER"]
-    HOME = os.environ["HOME"]
-
-    if "local_directory" not in kwargs:
-        # The default local scratch directory on the Janelia Cluster
-        kwargs["local_directory"] = f"/scratch/{USER}/"
-
-    if "log_directory" not in kwargs:
-        log_dir = f"{HOME}/.dask_distributed/"
-        Path(log_dir).mkdir(parents=False, exist_ok=True)
-        kwargs["log_directory"] = log_dir
-
-    cluster = LSFCluster(
-        cores=threads_per_worker,
-        walltime=walltime,
-        death_timeout=death_timeout,
-        **kwargs,
-    )
-    return cluster
-
-
-def get_LocalCluster(threads_per_worker: int = 1, n_workers: int = 0, memory_limit: str = '16GB', **kwargs):
-    """
-    Creata a distributed.LocalCluster with defaults that make it more similar to a deployment on the Janelia Compute cluster.
-    This function is a light wrapper around the distributed.LocalCluster constructor.
-    Parameters
-    ----------
-    n_workers: int
-        The number of workers to start the cluster with. This defaults to 0 here.
-    threads_per_worker: int
-        The number of threads to assign to each worker.
-    **kwargs:
-        Additional keyword arguments passed to the LocalCluster constructor
-    Examples
-    --------
-    >>> cluster = get_LocalCluster(threads_per_worker=8)
-    """
-    return LocalCluster(
-        n_workers=n_workers, threads_per_worker=threads_per_worker, memory_limit=memory_limit, **kwargs
-    )
-
-
-def get_cluster(
-    threads_per_worker: int = 1,
-    walltime: str = "1:00",
-    local_memory_limit: str = "16GB",
-    deployment: Optional[str] = None,
-    local_kwargs: Dict[str, Any] = {},
-    lsf_kwargs: Dict[str, Any] = {"memory": "16GB"},
-) -> Union[LSFCluster, LocalCluster]:
-
-    """Convenience function to generate a dask cluster on either a local machine or the compute cluster.
-    Create a distributed.Client object backed by either a dask_jobqueue.LSFCluster (for use on the Janelia Compute Cluster)
-    or a distributed.LocalCluster (for use on a single machine). This function uses the output of the bsubAvailable function
-    to determine whether code is running on the compute cluster or not.
-    Additional keyword arguments given to this function will be forwarded to the constructor for the Client object.
-    Parameters
-    ----------
-    threads_per_worker: int
-        Number of threads per worker. Defaults to 1.
-    deployment: str or None
-        Which deployment (LocalCluster or LSFCluster) to prefer. If deployment=None, then LSFCluster is preferred, but LocalCluster is used if
-        bsub is not available. If deployment='lsf' and bsub is not available, an error is raised.
-    local_kwargs: dict
-        Dictionary of keyword arguments for the distributed.LocalCluster constructor
-    lsf_kwargs: dict
-        Dictionary of keyword arguments for the dask_jobqueue.LSFCluster constructor
-    """
-
-    if "cores" in lsf_kwargs:
-        warnings.warn(
-            "The `cores` kwarg for LSFCLuster has no effect. Use the `threads_per_worker` argument instead."
-        )
-
-    if "threads_per_worker" in local_kwargs:
-        warnings.warn(
-            "the `threads_per_worker` kwarg was found in `local_kwargs`. It will be overwritten with the `threads_per_worker` argument to this function."
-        )
-
-    if deployment is None:
-        if bsub_available():
-            cluster = get_LSFCLuster(threads_per_worker, **lsf_kwargs)
-        else:
-            cluster = get_LocalCluster(threads_per_worker, **local_kwargs)
-    elif deployment == "lsf":
-        if bsub_available():
-            cluster = get_LSFCLuster(threads_per_worker, walltime, **lsf_kwargs)
-        else:
-            raise EnvironmentError(
-                "You requested an LSFCluster but the command `bsub` is not available."
-            )
-    elif deployment == "local":
-        cluster = get_LocalCluster(threads_per_worker, 0, local_memory_limit, **local_kwargs)
-    else:
-        raise ValueError(
-            f'deployment must be one of (None, "lsf", or "local"), not {deployment}'
-        )
-
-    return cluster
+from dask_janelia import get_LSFCLuster
 
 # 2nd brightest of the 8 pixels
 # equivalent to sort(vec(arg))[7] but half the time and a third the memory usage
@@ -473,22 +317,21 @@ def setup_cluster(
     monitoring: bool = False,
     is_lsf: bool = False,
     walltime: str = "1:00",
-    local_memory_limit: str = "16GB",
+    memory_limit: str = "16GB",
     lsf_maximum_jobs: int = 1,
     thread_num: int = 1,
-    **lsf_kwargs
+    project: str = None
     ):
 
     cluster = None
     if cluster_address:
         cluster = cluster_address
     elif is_lsf:
-        cluster = get_cluster(deployment="lsf", walltime=walltime, lsf_kwargs = lsf_kwargs)
+        cluster = get_LSFCLuster(threads_per_worker=1, walltime=walltime, project=project, memory=memory_limit)
         cluster.adapt(minimum_jobs=1, maximum_jobs = lsf_maximum_jobs)
         cluster.scale(thread_num)
     else:
-        cluster = get_cluster(deployment="local", local_memory_limit = local_memory_limit)
-        cluster.scale(thread_num)
+        cluster = LocalCluster(n_workers=1, threads_per_worker=thread_num, memory_limit=memory_limit)
 
     dashboard_address = None
     client = None
@@ -498,27 +341,23 @@ def setup_cluster(
     elif cluster_address:
         client = Client(address=cluster)
 
-    import dask.distributed
-    dask.distributed.Scheduler.
-
     return client
 
-def setup_dask_array_stack(
-        file_path: str = None,
-        nlevels: int = 1
+def adjust_dimensions(dim, nlevels):
+    for i in range(0, nlevels):
+        while(dim[i] % pow(2, nlevels) > 0):
+            dim[i] -= 1
+
+def stack_to_dask_array(
+    file_path: str,
+    nlevels: int
     ):
     ret = None
     if file_path:
         img = dask_image.imread.imread(file_path)
 
         dim = np.asarray(img.shape)
-        
-        while(dim[0] % pow(2, nlevels) > 0):
-            dim[0] -= 1
-        while(dim[1] % pow(2, nlevels) > 0):
-            dim[1] -= 1
-        while(dim[2] % pow(2, nlevels) > 0):
-            dim[2] -= 1
+        dim = adjust_dimensions(dim, nlevels)
         dim_leaf = [x >> (nlevels - 1) for x in dim]
 
         logging.info("Adjusted image size: " + str(dim) + ", Dim leaf: " + str(dim_leaf))
@@ -527,9 +366,9 @@ def setup_dask_array_stack(
         ret = adjusted.rechunk(dim_leaf)
     return ret
 
-def setup_dask_array_slice(
-        indir: str = None,
-        nlevels: int = 1
+def slice_to_dask_array(
+    indir: str,
+    nlevels: int
     ):
     ret = None
     images = None
@@ -559,13 +398,7 @@ def setup_dask_array_slice(
             return ret
 
         dim = np.asarray((len(img_files), im_height, im_width))
-        
-        while(dim[0] % pow(2, nlevels) > 0):
-            dim[0] -= 1
-        while(dim[1] % pow(2, nlevels) > 0):
-            dim[1] -= 1
-        while(dim[2] % pow(2, nlevels) > 0):
-            dim[2] -= 1
+        dim = adjust_dimensions(dim, nlevels)
         dim_leaf = [x >> (nlevels - 1) for x in dim]
 
         logging.info("Adjusted image size: " + str(dim) + ", Dim leaf: " + str(dim_leaf))
@@ -573,6 +406,125 @@ def setup_dask_array_slice(
         ret = da.zeros((dim[0], dim[1], dim[2], samples_per_pixel), chunks=(dim_leaf[0], dim_leaf[1], dim_leaf[2], samples_per_pixel))
     
     return ret
+
+def save_transform_txt(
+    outdir: str,
+    origin: str,
+    voxsize: str,
+    nlevels: int,
+    ktxout: str
+    ):
+
+    ostr = origin.split(",")
+    o = []
+    if len(ostr) > 0:
+        o.append(ostr[2])
+    else:
+        o.append("0.0")
+    if len(ostr) > 1:
+        o.append(ostr[1])
+    else:
+        o.append("0.0")
+    if len(ostr) > 2:
+        o.append(ostr[0])
+    else:
+        o.append("0.0")
+
+    vsstr = voxsize.split(",")
+    vs = []
+    if len(vsstr) > 0:
+        vs.append(float(vsstr[2]))
+    else:
+        vs.append(1.0)
+    if len(vsstr) > 1:
+        vs.append(float(vsstr[1]))
+    else:
+        vs.append(1.0)
+    if len(vsstr) > 2:
+        vs.append(float(vsstr[0]))
+    else:
+        vs.append(1.0)
+
+    l = []
+    l.append("ox: " + o[2])
+    l.append("oy: " + o[1])
+    l.append("oz: " + o[0])
+    l.append("sx: " + '{:.14g}'.format(vs[2] * 1000 * pow(2, nlevels-1)))
+    l.append("sy: " + '{:.14g}'.format(vs[1] * 1000 * pow(2, nlevels-1)))
+    l.append("sz: " + '{:.14g}'.format(vs[0] * 1000 * pow(2, nlevels-1)))
+    l.append("nl: " + str(nlevels))
+
+    Path(outdir).mkdir(parents=True, exist_ok=True)
+    tr_path = os.path.join(outdir, "transform.txt")
+    with open(tr_path, mode='w') as f:
+        f.write('\n'.join(l))
+
+    if ktxout and outdir != ktxout:
+        Path(ktxout).mkdir(parents=True, exist_ok=True)
+        copyfile(tr_path, os.path.join(ktxout, "transform.txt"))
+
+def covert_tiff_to_tiled_tiff(input_paths: List[str], task_num: int, outdir: str, maxbatch: int = 200):
+    slice_files = input_paths
+    futures = []
+    logging.info("tiff-to-tiled-tiff conversion")
+    batch_slice_num = len(slice_files) / task_num
+    if maxbatch > 0 and batch_slice_num > maxbatch:
+        batch_slice_num = maxbatch
+    if batch_slice_num < 1: 
+        batch_slice_num = 1
+    chunked_tif_list = np.array_split(slice_files, (int)(len(slice_files) / batch_slice_num))
+    for tlist in chunked_tif_list:
+        future = dask.delayed(conv_tiled_tiffs)(tlist, outdir, (256, 256))
+        futures.append(future)
+    with ProgressBar():
+        results = dask.compute(futures)
+        slice_files = [item for sublist in results[0] for item in sublist]
+    logging.info("done")
+    return slice_files
+
+def delete_temporary_files(tmpdir: str, task_num: int, maxbatch: int = 200):
+    logging.info("deleting temporary files...")
+    tlist = [entry.path for entry in scantree(tmpdir)]
+    batch_file_num = len(tlist) / task_num
+    if maxbatch > 0 and batch_file_num > maxbatch:
+        batch_file_num = maxbatch
+    if batch_file_num < 1:
+        batch_file_num = 1
+    chunked_file_list = np.array_split(tlist, (int)(len(tlist) / batch_file_num))
+    futures = []
+    for flist in chunked_file_list:
+        future = dask.delayed(delete_files)(flist)
+        futures.append(future)
+    with ProgressBar():
+        dask.compute(futures)
+    logging.info("done")
+
+def save_tiff_blocks():
+    futures = []
+    batch_block_num = (int)(bnum * bnum / task_num)
+    if maxbatch > 0 and batch_block_num > maxbatch:
+        batch_block_num = maxbatch
+    if batch_block_num < 1: 
+        batch_block_num = 1
+    coord_list = []
+    for y in range(1, bnum+1):
+        for x in range(1, bnum+1):
+            coord_list.append((z,y,x))
+            if len(coord_list) >= batch_block_num:
+                if samples_per_pixel == 1:
+                    future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch+i, volume_dtype, vs, samples_per_pixel)
+                else:
+                    future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel)
+                futures.append(future)
+                coord_list = []
+    if len(coord_list) > 0:
+        if samples_per_pixel == 1:
+            future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch+i, volume_dtype, vs, samples_per_pixel)
+        else:
+            future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel)
+        futures.append(future)
+    with ProgressBar():
+        dask.compute(futures)
 
 
 def build_octree_from_tiff_slices():
@@ -639,8 +591,9 @@ def build_octree_from_tiff_slices():
             outdir = ktxout
 
     if ktx:
-        ktxroot = ktxout
         ktxout = os.path.join(ktxout, "ktx")
+    else:
+        ktxout = None
 
     if ktxonly:
         outdir = ktxout
@@ -652,24 +605,16 @@ def build_octree_from_tiff_slices():
     tmpdir = os.path.join(outdir, tmpdir_name)
 
     maxbatch = args.maxbatch
-
-    my_lsf_kwargs={}
-
-    my_lsf_kwargs['memory'] = args.memory
-    local_memory_limit = args.memory
-
-    if args.project:
-       my_lsf_kwargs['project'] = args.project
     
     client = setup_cluster(
         cluster_address=args.cluster,
         monitoring=monitoring,
         is_lsf=args.lsf,
         walltime=args.walltime,
-        local_memory_limit=local_memory_limit,
+        memory_limit=args.memory,
         lsf_maximum_jobs=args.maxjobs,
         thread_num=tnum,
-        lsf_kwargs=my_lsf_kwargs
+        project=args.project
     )
     
     task_num = tnum * 2
@@ -683,116 +628,31 @@ def build_octree_from_tiff_slices():
 
     logging.info("task_num: " + str(task_num))
 
-    # use dask array (check chunk size)
-    # create a function
-    # check if the type of all input files are same
-    images = None
-    dim = None
-    volume_dtype = None
+    darray = None
+    tiled_tif_conversion = False
     if len(indirs) > 0 and indirs[0]:
-        img_files = [os.path.join(indirs[0], f) for f in os.listdir(indirs[0]) if f.endswith(('.tif', '.jp2'))]
-        im_width = 0
-        im_height = 0
-        samples_per_pixel = 1
-        tiled_tif_conversion = False
-        try:
-            if img_files[0].endswith('.tif'):
-                with TiffFile(img_files[0]) as tif:
-                    im_width = tif.pages[0].imagewidth
-                    im_height = tif.pages[0].imagelength
-                    logging.info(tif.pages[0].dtype)
-                    volume_dtype = tif.pages[0].dtype
-                    if im_width >= 8192:
-                        tiled_tif_conversion = True
-            elif img_files[0].endswith('.jp2'):
-                with rasterio.open(img_files[0]) as src:
-                    im_width = src.width
-                    im_height = src.height
-                    samples_per_pixel = src.count
-                    volume_dtype = src.dtypes[0]
-                    tiled_tif_conversion = False
-        except Exception as err:
-            logging.error(err)
-            logging.error("Could not get image dimensions and properties.")
-            return
-        dim = np.asarray((len(img_files), im_height, im_width))
+        darray = slice_to_dask_array(indirs[0], nlevels)
+        if darray.shape[2] >= 8192:
+            tiled_tif_conversion = True
+            Path(tmpdir).mkdir(parents=True, exist_ok=True)
     elif len(infiles) > 0 and infiles[0]:
-        images = dask_image.imread.imread(infiles[0])
-        dim = np.asarray(images.shape)
-        volume_dtype = images.dtype
+        darray = stack_to_dask_array(infiles[0], nlevels)
     else:
         logging.error('Please specify an input dataset.')
         return
-    
+
+    dim = darray.shape[:2]
+    volume_dtype = darray
+    samples_per_pixel = darray.shape[3]
+    dim_leaf = darray.chunksize[:2]
+
     logging.info("Will generate octree with " + str(nlevels) +" levels to " + str(outdir))
     logging.info("Image dimensions: " + str(dim))
     logging.info("Image type: " + str(volume_dtype))
     logging.info("samples per pixel: " + str(samples_per_pixel))
-    
-    
-    while(dim[0] % pow(2, nlevels) > 0):
-        dim[0] -= 1
-    while(dim[1] % pow(2, nlevels) > 0):
-        dim[1] -= 1
-    while(dim[2] % pow(2, nlevels) > 0):
-        dim[2] -= 1
-    dim_leaf = [x >> (nlevels - 1) for x in dim]
-
     logging.info("Adjusted image size: " + str(dim) + ", Dim leaf: " + str(dim_leaf))
 
-    ranges = [(c, c+dim_leaf[0]) for c in range(0,dim[0],dim_leaf[0])]
-
-    ostr = args.origin.split(",")
-    o = []
-    if len(ostr) > 0:
-        o.append(ostr[2])
-    else:
-        o.append("0.0")
-    if len(ostr) > 1:
-        o.append(ostr[1])
-    else:
-        o.append("0.0")
-    if len(ostr) > 2:
-        o.append(ostr[0])
-    else:
-        o.append("0.0")
-
-    vsstr = args.voxsize.split(",")
-    vs = []
-    if len(vsstr) > 0:
-        vs.append(float(vsstr[2]))
-    else:
-        vs.append(1.0)
-    if len(vsstr) > 1:
-        vs.append(float(vsstr[1]))
-    else:
-        vs.append(1.0)
-    if len(vsstr) > 2:
-        vs.append(float(vsstr[0]))
-    else:
-        vs.append(1.0)
-
-    l = []
-    l.append("ox: " + o[2])
-    l.append("oy: " + o[1])
-    l.append("oz: " + o[0])
-    l.append("sx: " + '{:.14g}'.format(vs[2] * 1000 * pow(2, nlevels-1)))
-    l.append("sy: " + '{:.14g}'.format(vs[1] * 1000 * pow(2, nlevels-1)))
-    l.append("sz: " + '{:.14g}'.format(vs[0] * 1000 * pow(2, nlevels-1)))
-    l.append("nl: " + str(nlevels))
-
-    Path(outdir).mkdir(parents=True, exist_ok=True)
-    tr_path = os.path.join(outdir, "transform.txt")
-    with open(tr_path, mode='w') as f:
-        f.write('\n'.join(l))
-
-    if ktx:
-        if outdir != ktxroot:
-            Path(ktxroot).mkdir(parents=True, exist_ok=True)
-            copyfile(tr_path, os.path.join(ktxroot, "transform.txt"))
-        if outdir != ktxout:
-            Path(ktxout).mkdir(parents=True, exist_ok=True)
-            copyfile(tr_path, os.path.join(ktxout, "transform.txt"))
+    save_transform_txt(outdir=outdir, origin=args.origin, voxsize=args.voxsize, nlevels=nlevels, ktxout=ktxout)
 
     if samples_per_pixel > 1:
         indirs = [indirs[0]]
@@ -807,9 +667,6 @@ def build_octree_from_tiff_slices():
                 img_files = [os.path.join(indirs[i], f) for f in os.listdir(indirs[i]) if f.endswith(('.tif', '.jp2'))]
                 img_files.sort()
 
-            if tiled_tif_conversion:
-                Path(tmpdir).mkdir(parents=True, exist_ok=True)
-
             print("writing the highest level")
             chunked_list = [img_files[j:j+dim_leaf[0]] for j in range(0, len(img_files), dim_leaf[0])]
             bnum = pow(2, nlevels - 1)
@@ -817,22 +674,8 @@ def build_octree_from_tiff_slices():
                 slice_files = chunked_list[z-1]
 
                 #tiff-to-tiled-tiff conversion
-                futures = []
                 if tiled_tif_conversion:
-                    print("tiff-to-tiled-tiff conversion" + str(i))
-                    batch_slice_num = len(slice_files) / task_num
-                    if maxbatch > 0 and batch_slice_num > maxbatch:
-                        batch_slice_num = maxbatch
-                    if batch_slice_num < 1: 
-                        batch_slice_num = 1
-                    chunked_tif_list = np.array_split(slice_files, (int)(len(slice_files) / batch_slice_num))
-                    for tlist in chunked_tif_list:
-                        future = dask.delayed(conv_tiled_tiffs)(tlist, tmpdir, (256, 256))
-                        futures.append(future)
-                    with ProgressBar():
-                        results = dask.compute(futures)
-                        slice_files = [item for sublist in results[0] for item in sublist]
-                    print("done") #use logger for cluster
+                    covert_tiff_to_tiled_tiff(input_paths=slice_files, task_num=task_num, outdir=outdir, maxbatch=maxbatch)
 
                 futures = []
                 batch_block_num = (int)(bnum * bnum / task_num)
@@ -861,23 +704,8 @@ def build_octree_from_tiff_slices():
                     dask.compute(futures)
                 
                 #delete temporary files
-                futures = []
                 if tiled_tif_conversion:
-                    print("deleting temporary files...")
-                    tlist = [entry.path for entry in scantree(tmpdir)]
-                    batch_file_num = len(tlist) / task_num
-                    if maxbatch > 0 and batch_file_num > maxbatch:
-                        batch_file_num = maxbatch
-                    if batch_file_num < 1: 
-                        batch_file_num = 1
-                    chunked_file_list = np.array_split(tlist, (int)(len(tlist) / batch_file_num))
-                    futures = []
-                    for flist in chunked_file_list:
-                        future = dask.delayed(delete_files)(flist)
-                        futures.append(future)
-                    with ProgressBar():
-                        dask.compute(futures)
-                    print("done")
+                    delete_temporary_files(tmpdir=tmpdir, task_num=task_num, maxbatch=maxbatch)
             print("done")
     elif len(infiles) > 0: #tif stack
         adjusted = images[:dim[0], :dim[1], :dim[2]]
