@@ -593,7 +593,6 @@ def build_octree_from_tiff_slices():
     volume_dtype = None
     if len(indirs) > 0 and indirs[0]:
         img_files = [os.path.join(indirs[0], f) for f in os.listdir(indirs[0]) if f.endswith(('.tif', '.jp2'))]
-        img_files.sort()
         im_width = 0
         im_height = 0
         im_chnum = 1
@@ -704,6 +703,7 @@ def build_octree_from_tiff_slices():
         for i in range(0, len(indirs)):
             if i > 0:
                 img_files = [os.path.join(indirs[i], f) for f in os.listdir(indirs[i]) if f.endswith(('.tif', '.jp2'))]
+                img_files.sort()
 
             #tiff-to-tiled-tiff conversion
             delete_tmpfiles = False
