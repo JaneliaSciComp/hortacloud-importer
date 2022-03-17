@@ -209,33 +209,20 @@ def get_cluster(
 
     return cluster
 
-# 2nd brightest of the 8 pixels
-# equivalent to sort(vec(arg))[7] but half the time and a third the memory usage
-def downsampling_function(view):
-    m0 = 0
-    m1 = 0
-    for z in range(0, 2):
-        for y in range(0, 2):
-            for x in range(0, 2):
-                tmp = view[z, y, x]
-                if tmp > m0:
-                    m1 = m0
-                    m0 = tmp
-                elif tmp > m1:
-                    m1 = tmp
-    return m1
+# https://stackoverflow.com/questions/62567983/block-reduce-downsample-3d-array-with-mode-function
+def blockify(image, block_size):
+    shp = image.shape
+    out_shp = [s//b for s,b in zip(shp, block_size)]
+    reshape_shp = np.c_[out_shp,block_size].ravel()
+    nC = np.prod(block_size)
+    return image.reshape(reshape_shp).transpose(0,2,4,1,3,5).reshape(-1,nC)
 
 def downsample_2ndmax(out_tile_jl, coord, shape_leaf_px, scratch):
-    ix = (((coord - 1) >> 0) & 1) * shape_leaf_px[2] >> 1
-    iy = (((coord - 1) >> 1) & 1) * shape_leaf_px[1] >> 1
-    iz = (((coord - 1) >> 2) & 1) * shape_leaf_px[0] >> 1
-    for z in range(0, shape_leaf_px[0]-1, 2):
-        tmpz = iz + ((z + 1) >> 1)
-        for y in range(0, shape_leaf_px[1]-1, 2):
-            tmpy = iy + ((y + 1) >> 1)
-            for x in range(0, shape_leaf_px[2]-1, 2):
-                tmpx = ix + ((x + 1) >> 1)
-                out_tile_jl[tmpz, tmpy, tmpx] = downsampling_function(scratch[z:z + 2, y:y + 2, x:x + 2])
+    bbox = get_output_bbox_for_downsampling(coord, shape_leaf_px)
+    b = blockify(scratch, block_size=(2,2,2))
+    b.sort(axis=1)
+    down_img = b[:,-2].reshape(bbox[1,0]-bbox[0,0], bbox[1,1]-bbox[0,1], bbox[1,2]-bbox[0,2])
+    out_tile_jl[bbox[0,0]:bbox[1,0], bbox[0,1]:bbox[1,1], bbox[0,2]:bbox[1,2]] = down_img.astype(scratch.dtype)
 
 def get_output_bbox_for_downsampling(coord, shape_leaf_px):
     ix = (((coord - 1) >> 0) & 1) * shape_leaf_px[2] >> 1
