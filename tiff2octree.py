@@ -51,35 +51,15 @@ from rasterio.windows import Window
 
 from scipy import ndimage
 
-from dask_janelia import get_LSFCLuster
+from dask_janelia import get_cluster
 
-# 2nd brightest of the 8 pixels
-# equivalent to sort(vec(arg))[7] but half the time and a third the memory usage
-def downsampling_function(view):
-    m0 = 0
-    m1 = 0
-    for z in range(0, 2):
-        for y in range(0, 2):
-            for x in range(0, 2):
-                tmp = view[z, y, x]
-                if tmp > m0:
-                    m1 = m0
-                    m0 = tmp
-                elif tmp > m1:
-                    m1 = tmp
-    return m1
-
-def downsample_2ndmax(out_tile_jl, coord, shape_leaf_px, scratch):
-    ix = (((coord - 1) >> 0) & 1) * shape_leaf_px[2] >> 1
-    iy = (((coord - 1) >> 1) & 1) * shape_leaf_px[1] >> 1
-    iz = (((coord - 1) >> 2) & 1) * shape_leaf_px[0] >> 1
-    for z in range(0, shape_leaf_px[0]-1, 2):
-        tmpz = iz + ((z + 1) >> 1)
-        for y in range(0, shape_leaf_px[1]-1, 2):
-            tmpy = iy + ((y + 1) >> 1)
-            for x in range(0, shape_leaf_px[2]-1, 2):
-                tmpx = ix + ((x + 1) >> 1)
-                out_tile_jl[tmpz, tmpy, tmpx] = downsampling_function(scratch[z:z + 2, y:y + 2, x:x + 2])
+# https://stackoverflow.com/questions/62567983/block-reduce-downsample-3d-array-with-mode-function
+def blockify(image, block_size):
+    shp = image.shape
+    out_shp = [s//b for s,b in zip(shp, block_size)]
+    reshape_shp = np.c_[out_shp,block_size].ravel()
+    nC = np.prod(block_size)
+    return image.reshape(reshape_shp).transpose(0,2,4,1,3,5).reshape(-1,nC)
 
 def get_output_bbox_for_downsampling(coord, shape_leaf_px):
     ix = (((coord - 1) >> 0) & 1) * shape_leaf_px[2] >> 1
@@ -90,6 +70,13 @@ def get_output_bbox_for_downsampling(coord, shape_leaf_px):
     izz = iz+(shape_leaf_px[0] >> 1)
 
     return np.array([[iz, iy, ix], [izz, iyy, ixx]])
+
+def downsample_2ndmax(out_tile_jl, coord, shape_leaf_px, scratch):
+    bbox = get_output_bbox_for_downsampling(coord, shape_leaf_px)
+    b = blockify(scratch, block_size=(2,2,2))
+    b.sort(axis=1)
+    down_img = b[:,-2].reshape(bbox[1,0]-bbox[0,0], bbox[1,1]-bbox[0,1], bbox[1,2]-bbox[0,2])
+    out_tile_jl[bbox[0,0]:bbox[1,0], bbox[0,1]:bbox[1,1], bbox[0,2]:bbox[1,2]] = down_img.astype(scratch.dtype)
 
 def downsample_aa(out_tile_jl, coord, shape_leaf_px, scratch):
     bbox = get_output_bbox_for_downsampling(coord, shape_leaf_px)
@@ -137,7 +124,7 @@ def get_cropped_image_rasterio(file_paths, z0, y0, x0, d, h, w, type, ch):
                 logging.error(err)
     return output
 
-def gen_block_from_slices_batch(chunk_coords, file_paths, target_path, nlevels, dim_leaf, ch, type, resolutions, chnum):
+def gen_blocks_from_slices_batch(chunk_coords, file_paths, target_path, nlevels, dim_leaf, ch, type, resolutions, chnum):
     for pos in chunk_coords:
         gen_block_from_slices(pos, file_paths, target_path, nlevels, dim_leaf, ch, type, resolutions, chnum)
 
@@ -320,33 +307,35 @@ def setup_cluster(
     memory_limit: str = "16GB",
     lsf_maximum_jobs: int = 1,
     thread_num: int = 1,
-    project: str = None
+    project: str = ""
     ):
 
     cluster = None
     if cluster_address:
         cluster = cluster_address
     elif is_lsf:
-        cluster = get_LSFCLuster(threads_per_worker=1, walltime=walltime, project=project, memory=memory_limit)
+        cluster = get_cluster(threads_per_worker=1, lsf_kwargs={'walltime': walltime,'memory': memory_limit, 'project' : project})
         cluster.adapt(minimum_jobs=1, maximum_jobs = lsf_maximum_jobs)
         cluster.scale(thread_num)
     else:
         cluster = LocalCluster(n_workers=1, threads_per_worker=thread_num, memory_limit=memory_limit)
 
-    dashboard_address = None
+    dashboard_address = ":8787"
     client = None
     if monitoring: 
         logging.info(f"Starting dashboard on {dashboard_address}")
         client = Client(address=cluster, processes=True, dashboard_address=dashboard_address)
     elif cluster_address:
-        client = Client(address=cluster)
+        client = Client(address=cluster, dashboard_address=None)
 
     return client
 
 def adjust_dimensions(dim, nlevels):
-    for i in range(0, nlevels):
-        while(dim[i] % pow(2, nlevels) > 0):
-            dim[i] -= 1
+    ret = np.copy(dim)
+    for i in range(0, len(ret)):
+        while(ret[i] % pow(2, nlevels) > 0):
+            ret[i] -= 1
+    return ret
 
 def stack_to_dask_array(
     file_path: str,
@@ -379,23 +368,18 @@ def slice_to_dask_array(
         im_width = 0
         im_height = 0
         samples_per_pixel = 1
-        try:
-            if img_files[0].endswith('.tif'):
-                with TiffFile(img_files[0]) as tif:
-                    im_width = tif.pages[0].imagewidth
-                    im_height = tif.pages[0].imagelength
-                    logging.info(tif.pages[0].dtype)
-                    volume_dtype = tif.pages[0].dtype
-            elif img_files[0].endswith('.jp2'):
-                with rasterio.open(img_files[0]) as src:
-                    im_width = src.width
-                    im_height = src.height
-                    samples_per_pixel = src.count
-                    volume_dtype = src.dtypes[0]
-        except Exception as err:
-            logging.error(err)
-            logging.error("Could not get image properties.")
-            return ret
+        if img_files[0].endswith('.tif'):
+            with TiffFile(img_files[0]) as tif:
+                im_width = tif.pages[0].imagewidth
+                im_height = tif.pages[0].imagelength
+                logging.info(tif.pages[0].dtype)
+                volume_dtype = tif.pages[0].dtype
+        elif img_files[0].endswith('.jp2'):
+            with rasterio.open(img_files[0]) as src:
+                im_width = src.width
+                im_height = src.height
+                samples_per_pixel = src.count
+                volume_dtype = src.dtypes[0]
 
         dim = np.asarray((len(img_files), im_height, im_width))
         dim = adjust_dimensions(dim, nlevels)
@@ -403,9 +387,26 @@ def slice_to_dask_array(
 
         logging.info("Adjusted image size: " + str(dim) + ", Dim leaf: " + str(dim_leaf))
 
-        ret = da.zeros((dim[0], dim[1], dim[2], samples_per_pixel), chunks=(dim_leaf[0], dim_leaf[1], dim_leaf[2], samples_per_pixel))
+        ret = da.zeros((dim[0], dim[1], dim[2], samples_per_pixel), chunks=(dim_leaf[0], dim_leaf[1], dim_leaf[2], samples_per_pixel), dtype=volume_dtype)
     
     return ret
+
+def parse_voxel_size(voxel_size_str: str):
+    vsstr = voxel_size_str.split(",")
+    vs = []
+    if len(vsstr) > 0:
+        vs.append(float(vsstr[2]))
+    else:
+        vs.append(1.0)
+    if len(vsstr) > 1:
+        vs.append(float(vsstr[1]))
+    else:
+        vs.append(1.0)
+    if len(vsstr) > 2:
+        vs.append(float(vsstr[0]))
+    else:
+        vs.append(1.0)
+    return vs
 
 def save_transform_txt(
     outdir: str,
@@ -458,10 +459,15 @@ def save_transform_txt(
     tr_path = os.path.join(outdir, "transform.txt")
     with open(tr_path, mode='w') as f:
         f.write('\n'.join(l))
-
-    if ktxout and outdir != ktxout:
-        Path(ktxout).mkdir(parents=True, exist_ok=True)
-        copyfile(tr_path, os.path.join(ktxout, "transform.txt"))
+    
+    if ktxout:
+        ktxroot = Path(ktxout).parent
+        if outdir != ktxroot:
+            Path(ktxroot).mkdir(parents=True, exist_ok=True)
+            copyfile(tr_path, os.path.join(ktxroot, "transform.txt"))
+        if outdir != ktxout:
+            Path(ktxout).mkdir(parents=True, exist_ok=True)
+            copyfile(tr_path, os.path.join(ktxout, "transform.txt"))
 
 def covert_tiff_to_tiled_tiff(input_paths: List[str], task_num: int, outdir: str, maxbatch: int = 200):
     slice_files = input_paths
@@ -499,8 +505,14 @@ def delete_temporary_files(tmpdir: str, task_num: int, maxbatch: int = 200):
         dask.compute(futures)
     logging.info("done")
 
-def save_tiff_blocks():
+def save_tiff_blocks(input_slices: List[str], output_path: str, z: int, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array):
     futures = []
+    bnum = pow(2, nlevels - 1)
+    volume_dtype = darray.dtype
+    samples_per_pixel = darray.shape[3]
+    dim_leaf = darray.chunksize[:3]
+    vs = parse_voxel_size(voxel_size_str)
+
     batch_block_num = (int)(bnum * bnum / task_num)
     if maxbatch > 0 and batch_block_num > maxbatch:
         batch_block_num = maxbatch
@@ -511,21 +523,120 @@ def save_tiff_blocks():
         for x in range(1, bnum+1):
             coord_list.append((z,y,x))
             if len(coord_list) >= batch_block_num:
-                if samples_per_pixel == 1:
-                    future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch+i, volume_dtype, vs, samples_per_pixel)
-                else:
-                    future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel)
+                future = dask.delayed(gen_blocks_from_slices_batch)(coord_list, input_slices, output_path, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel)
                 futures.append(future)
                 coord_list = []
     if len(coord_list) > 0:
-        if samples_per_pixel == 1:
-            future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch+i, volume_dtype, vs, samples_per_pixel)
-        else:
-            future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel)
+        future = dask.delayed(gen_blocks_from_slices_batch)(coord_list, input_slices, output_path, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel)
         futures.append(future)
     with ProgressBar():
         dask.compute(futures)
 
+def gen_highest_resolution_blocks_from_slices(indirs: List[str], output_path: str, tmpdir_path: str, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array):
+    dim_leaf = darray.chunksize[:3]
+    if darray.shape[2] >= 8192:
+        tiled_tif_conversion = True
+        Path(tmpdir_path).mkdir(parents=True, exist_ok=True)
+    else:
+        tiled_tif_conversion = False
+    
+    for i in range(0, len(indirs)):
+        img_files = [os.path.join(indirs[i], f) for f in os.listdir(indirs[i]) if f.endswith(('.tif', '.jp2'))]
+        img_files.sort()
+
+        logging.info("writing the highest level: channel " + str(ch+i))
+        chunked_list = [img_files[j:j+dim_leaf[0]] for j in range(0, len(img_files), dim_leaf[0])]
+        bnum = pow(2, nlevels - 1)
+        for z in range(1, bnum+1):
+            slice_files = chunked_list[z-1]
+            if tiled_tif_conversion:
+                slice_files = covert_tiff_to_tiled_tiff(input_paths=slice_files, task_num=task_num, outdir=output_path, maxbatch=maxbatch)
+
+            save_tiff_blocks(input_slices=slice_files, output_path=output_path, z=z, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch+i, voxel_size_str=voxel_size_str, darray=darray)
+
+            if tiled_tif_conversion:
+                delete_temporary_files(tmpdir=tmpdir_path, task_num=task_num, maxbatch=maxbatch)  
+        logging.info("done")
+
+def gen_highest_resolution_blocks_from_stack(infiles: List[str], output_path: str, nlevels: int, ch: int, darray: da.Array):
+    dim = darray.shape[:3]
+    dim_leaf = darray.chunksize[:3]
+    for i in range(0, len(infiles)):
+        images = dask_image.imread.imread(infiles[i])
+        adjusted = images[:dim[0], :dim[1], :dim[2]]
+        volume = adjusted.rechunk(dim_leaf)
+        volume.map_blocks(save_block, output_path, nlevels, dim_leaf, ch+i, chunks=(1,1,1)).compute()
+
+def downsample_octree_blocks(output_path: str, method: str, nlevels: int, task_num: int, maxbatch: int, ch_ids: List[int], voxel_size_str: str, darray: da.Array):
+    dim_leaf = darray.chunksize[:3]
+    for lv in range(nlevels-1, 0, -1):
+        logging.info("downsampling level " + str(lv+1))
+        futures = []
+        bnum = pow(2, lv - 1)
+        batch_block_num = (int)(bnum * bnum * bnum * len(ch_ids) / task_num)
+        if maxbatch > 0 and batch_block_num > maxbatch:
+            batch_block_num = maxbatch
+        if batch_block_num < 1: 
+            batch_block_num = 1
+        coord_list = []
+        vs = parse_voxel_size(voxel_size_str)
+        vs = [r * 2 for r in vs]
+        for z in range(1, bnum+1):
+            for y in range(1, bnum+1):
+                for x in range(1, bnum+1):
+                    for c in ch_ids:
+                        coord_list.append((z,y,x))
+                        if len(coord_list) >= batch_block_num:
+                            future = dask.delayed(downsample_and_save_block_batch)(coord_list, output_path, lv, dim_leaf, c, darray.dtype, method, vs)
+                            futures.append(future)
+                            coord_list = []
+        if len(coord_list) > 0:
+            future = dask.delayed(downsample_and_save_block_batch)(coord_list, output_path, lv, dim_leaf, c, darray.dtype, method, vs)
+            futures.append(future)
+        with ProgressBar():
+            dask.compute(futures)
+        logging.info("done")
+
+def ktx_conversion(indir: str, outdir: str, nlevels: int, task_num: int, maxbatch: int, delete_source: bool):
+    if outdir != indir:
+        ktx_mkdir = True
+    else:
+        ktx_mkdir = False
+    for lv in range(nlevels, 0, -1):
+        logging.info("ktx conversion level " + str(lv))
+        futures = []
+        bnum = pow(2, lv - 1)
+        batch_block_num = (int)(bnum * bnum * bnum / task_num)
+        if maxbatch > 0 and batch_block_num > maxbatch:
+            batch_block_num = maxbatch
+        if batch_block_num < 1: 
+            batch_block_num = 1
+        coord_list = []
+        for z in range(1, bnum+1):
+            for y in range(1, bnum+1):
+                for x in range(1, bnum+1):
+                    coord_list.append((z,y,x))
+                    if len(coord_list) >= batch_block_num:
+                        future_ktx = dask.delayed(convert_block_ktx_batch)(coord_list, indir, outdir, lv, True, True, ktx_mkdir if lv == nlevels else False, delete_source)
+                        futures.append(future_ktx)
+                        coord_list = []
+        if len(coord_list) > 0:
+            future_ktx = dask.delayed(convert_block_ktx_batch)(coord_list, indir, outdir, lv, True, True, ktx_mkdir if lv == nlevels else False, delete_source)
+            futures.append(future_ktx)
+        with ProgressBar():
+            dask.compute(futures)
+        logging.info("done")
+    
+    ktxroot = Path(outdir).parent
+    if ktxroot != indir:
+        try:
+            for fpath in glob.glob(os.path.join(indir, 'default.[0-9].tif')):
+                fname = os.path.basename(fpath)
+                copyfile(fpath, os.path.join(ktxroot, fname))
+                os.remove(fpath)
+        except Exception as err:
+            logging.error(err)
+            logging.error("Could not copy the lowest resolution tif images.")
 
 def build_octree_from_tiff_slices():
     argv = sys.argv
@@ -554,12 +665,16 @@ def build_octree_from_tiff_slices():
     parser.add_argument("--ktxonly", dest="ktxonly", default=False, action="store_true", help="output only a ktx octree")
     parser.add_argument("--ktxout", dest="ktxout", type=str, default=None, help="output directory for a ktx octree")
     parser.add_argument("--cluster", dest="cluster", type=str, default=None, help="address of a dask scheduler server")
+    parser.add_argument("--verbose", dest="verbose", default=False, action="store_true", help="enable verbose logging")
 
     if not argv:
         parser.print_help()
         exit()
 
     args = parser.parse_args(argv)
+
+    if args.verbose:
+        logging.basicConfig(level=logging.INFO)
 
     tnum = args.number
     indirs = args.input.split(",")
@@ -632,19 +747,16 @@ def build_octree_from_tiff_slices():
     tiled_tif_conversion = False
     if len(indirs) > 0 and indirs[0]:
         darray = slice_to_dask_array(indirs[0], nlevels)
-        if darray.shape[2] >= 8192:
-            tiled_tif_conversion = True
-            Path(tmpdir).mkdir(parents=True, exist_ok=True)
     elif len(infiles) > 0 and infiles[0]:
         darray = stack_to_dask_array(infiles[0], nlevels)
     else:
         logging.error('Please specify an input dataset.')
         return
 
-    dim = darray.shape[:2]
+    dim = darray.shape[:3]
     volume_dtype = darray
     samples_per_pixel = darray.shape[3]
-    dim_leaf = darray.chunksize[:2]
+    dim_leaf = darray.chunksize[:3]
 
     logging.info("Will generate octree with " + str(nlevels) +" levels to " + str(outdir))
     logging.info("Image dimensions: " + str(dim))
@@ -661,134 +773,26 @@ def build_octree_from_tiff_slices():
         ch_ids = [ch+i for i in range(0, len(indirs))]
 
     #save the highest level
-    if len(indirs) > 0:
-        for i in range(0, len(indirs)):
-            if i > 0:
-                img_files = [os.path.join(indirs[i], f) for f in os.listdir(indirs[i]) if f.endswith(('.tif', '.jp2'))]
-                img_files.sort()
-
-            print("writing the highest level")
-            chunked_list = [img_files[j:j+dim_leaf[0]] for j in range(0, len(img_files), dim_leaf[0])]
-            bnum = pow(2, nlevels - 1)
-            for z in range(1, bnum+1):
-                slice_files = chunked_list[z-1]
-
-                #tiff-to-tiled-tiff conversion
-                if tiled_tif_conversion:
-                    covert_tiff_to_tiled_tiff(input_paths=slice_files, task_num=task_num, outdir=outdir, maxbatch=maxbatch)
-
-                futures = []
-                batch_block_num = (int)(bnum * bnum / task_num)
-                if maxbatch > 0 and batch_block_num > maxbatch:
-                    batch_block_num = maxbatch
-                if batch_block_num < 1: 
-                    batch_block_num = 1
-                coord_list = []
-                for y in range(1, bnum+1):
-                    for x in range(1, bnum+1):
-                        coord_list.append((z,y,x))
-                        if len(coord_list) >= batch_block_num:
-                            if samples_per_pixel == 1:
-                                future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch+i, volume_dtype, vs, samples_per_pixel)
-                            else:
-                                future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel)
-                            futures.append(future)
-                            coord_list = []
-                if len(coord_list) > 0:
-                    if samples_per_pixel == 1:
-                        future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch+i, volume_dtype, vs, samples_per_pixel)
-                    else:
-                        future = dask.delayed(gen_block_from_slices_batch)(coord_list, slice_files, outdir, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel)
-                    futures.append(future)
-                with ProgressBar():
-                    dask.compute(futures)
-                
-                #delete temporary files
-                if tiled_tif_conversion:
-                    delete_temporary_files(tmpdir=tmpdir, task_num=task_num, maxbatch=maxbatch)
-            print("done")
+    if len(indirs) > 0: # image slices
+        gen_highest_resolution_blocks_from_slices(indirs=indirs, output_path=outdir, tmpdir_path=tmpdir, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch, voxel_size_str=args.voxsize, darray=darray)
     elif len(infiles) > 0: #tif stack
-        adjusted = images[:dim[0], :dim[1], :dim[2]]
-        volume = adjusted.rechunk(dim_leaf)
-        volume.map_blocks(save_block, outdir, nlevels, dim_leaf, ch, chunks=(1,1,1)).compute()
-        ch_ids = []
-        for i in range(1, len(infiles)):
-            images = dask_image.imread.imread(infiles[i])
-            adjusted = images[:dim[0], :dim[1], :dim[2]]
-            volume = adjusted.rechunk(dim_leaf)
-            volume.map_blocks(save_block, outdir, nlevels, dim_leaf, ch+i, chunks=(1,1,1)).compute()
-            ch_ids.append(ch+i)
+        gen_highest_resolution_blocks_from_stack(infiles=infiles, output_path=outdir, nlevels=nlevels, ch=ch, darray=darray)
 
-    #downsample
-    for lv in range(nlevels-1, 0, -1):
-        print("downsampling level " + str(lv+1))
-        futures = []
-        bnum = pow(2, lv - 1)
-        batch_block_num = (int)(bnum * bnum * bnum * len(ch_ids) / task_num)
-        if maxbatch > 0 and batch_block_num > maxbatch:
-            batch_block_num = maxbatch
-        if batch_block_num < 1: 
-            batch_block_num = 1
-        coord_list = []
-        vs = [r * 2 for r in vs]
-        for z in range(1, bnum+1):
-            for y in range(1, bnum+1):
-                for x in range(1, bnum+1):
-                    for c in ch_ids:
-                        coord_list.append((z,y,x))
-                        if len(coord_list) >= batch_block_num:
-                            future = dask.delayed(downsample_and_save_block_batch)(coord_list, outdir, lv, dim_leaf, c, volume_dtype, dmethod, vs)
-                            futures.append(future)
-                            coord_list = []
-        if len(coord_list) > 0:
-            future = dask.delayed(downsample_and_save_block_batch)(coord_list, outdir, lv, dim_leaf, c, volume_dtype, dmethod, vs)
-            futures.append(future)
-        with ProgressBar():
-            dask.compute(futures)
-        print("done")
+    downsample_octree_blocks(output_path=outdir, method=dmethod, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch_ids=ch_ids, voxel_size_str=args.voxsize, darray=darray)
 
-    #ktx conversion
     if ktx:
-        for lv in range(nlevels, 0, -1):
-            print("ktx conversion level " + str(lv))
-            futures = []
-            bnum = pow(2, lv - 1)
-            batch_block_num = (int)(bnum * bnum * bnum / task_num)
-            if maxbatch > 0 and batch_block_num > maxbatch:
-                batch_block_num = maxbatch
-            if batch_block_num < 1: 
-                batch_block_num = 1
-            coord_list = []
-            for z in range(1, bnum+1):
-                for y in range(1, bnum+1):
-                    for x in range(1, bnum+1):
-                        coord_list.append((z,y,x))
-                        if len(coord_list) >= batch_block_num:
-                            future_ktx = dask.delayed(convert_block_ktx_batch)(coord_list, outdir, ktxout, lv, True, True, ktx_mkdir if lv == nlevels else False, ktxonly)
-                            futures.append(future_ktx)
-                            coord_list = []
-            if len(coord_list) > 0:
-                future_ktx = dask.delayed(convert_block_ktx_batch)(coord_list, outdir, ktxout, lv, True, True, ktx_mkdir if lv == nlevels else False, ktxonly)
-                futures.append(future_ktx)
-            with ProgressBar():
-                dask.compute(futures)
-            print("done")
-        if ktxonly and ktxroot != outdir:
-            try:
-                for fpath in glob.glob(os.path.join(outdir, 'default.[0-9].tif')):
-                    fname = os.path.basename(fpath)
-                    copyfile(fpath, os.path.join(ktxroot, fname))
-                    os.remove(fpath)
-            except BaseException as err:
-                print(err)
+        ktx_conversion(indir=outdir, outdir=ktxout, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, delete_source=ktxonly)
 
     try:
         if os.path.isdir(tmpdir):
             rmtree(tmpdir)
     except:
-        print("could not remove the temporary directory:" + tmpdir)
+        logging.error("could not remove the temporary directory:" + tmpdir)
 
-    client.close()
+    if client:
+        client.close()
+    
+    logging.info("build_octree_from_tiff_slices: Done.")
 
 
 def main():
