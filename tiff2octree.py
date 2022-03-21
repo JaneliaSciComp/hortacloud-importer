@@ -51,7 +51,7 @@ from rasterio.windows import Window
 
 from scipy import ndimage
 
-from dask_janelia import get_cluster
+import dask_janelia
 
 # https://stackoverflow.com/questions/62567983/block-reduce-downsample-3d-array-with-mode-function
 def blockify(image, block_size):
@@ -314,7 +314,7 @@ def setup_cluster(
     if cluster_address:
         cluster = cluster_address
     elif is_lsf:
-        cluster = get_cluster(threads_per_worker=1, lsf_kwargs={'walltime': walltime,'memory': memory_limit, 'project' : project})
+        cluster = dask_janelia.deploy.get_LSFCLuster(threads_per_worker=1, walltime=walltime, project=project, memory=memory_limit)
         cluster.adapt(minimum_jobs=1, maximum_jobs = lsf_maximum_jobs)
         cluster.scale(thread_num)
     else:
