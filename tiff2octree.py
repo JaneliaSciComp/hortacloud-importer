@@ -138,10 +138,13 @@ def gen_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_lea
         #logging.info((dim_leaf[0]*chunk_coord[0], dim_leaf[1]*chunk_coord[1], dim_leaf[2]*chunk_coord[2]))
 
         img_data = get_cropped_image_rasterio(file_paths, dim_leaf[0]*(chunk_coord[0]-1), dim_leaf[1]*(chunk_coord[1]-1), dim_leaf[2]*(chunk_coord[2]-1), dim_leaf[0], dim_leaf[1], dim_leaf[2], type, ch)
-    
-        logging.info(full_path)
-        Path(dir_path).mkdir(parents=True, exist_ok=True)
-        skimage.io.imsave(full_path, img_data, compress=6)
+
+        if img_data.max() > 0:
+            logging.info(full_path)
+            Path(dir_path).mkdir(parents=True, exist_ok=True)
+            skimage.io.imsave(full_path, img_data, compress=6)
+        else:
+            logging.info("skipped (empty): " + full_path)
 
 
 def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
@@ -175,8 +178,12 @@ def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, typ
     img_down = np.zeros(dim_leaf, dtype=type)
     
     for oct in range(1, 9):
-        blk_path = os.path.join(dir_path, str(oct))
-        scratch = skimage.io.imread(os.path.join(blk_path, img_name))
+        blk_path = os.path.join(os.path.join(dir_path, str(oct)), img_name)
+        try:
+            scratch = skimage.io.imread(blk_path)
+        except:
+            logging.info("empty: " + blk_path)
+            continue
         if downsampling_method == 'area':
             downsample_area(img_down, oct, dim_leaf, scratch)
         elif downsampling_method == 'aa':
@@ -190,10 +197,13 @@ def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, typ
 
     logging.info(full_path)
 
-    if level > 1:
-        skimage.io.imsave(full_path, img_down, compress=6)
-    else:
-        skimage.io.imsave(full_path, img_down)
+    if img_down.max() > 0:
+        logging.info(full_path)
+        Path(dir_path).mkdir(parents=True, exist_ok=True)
+        if level > 1:
+            skimage.io.imsave(full_path, img_down, compress=6)
+        else:
+            skimage.io.imsave(full_path, img_down)
 
 def convert_block_ktx_batch(chunk_coords, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source):
     for pos in chunk_coords:
@@ -205,6 +215,10 @@ def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_i
     dir_path = os.path.join(target_path, relpath)
     if make_dir:
         Path(dir_path).mkdir(parents=True, exist_ok=True)
+
+    file_list = glob.glob(os.path.join(dir_path, 'default.[0-9].tif'))
+    if len(file_list) == 0:
+        return
 
     octree_path0 = relpath.split(os.path.sep)
     octree_path = []
@@ -461,7 +475,7 @@ def save_transform_txt(
         f.write('\n'.join(l))
     
     if ktxout:
-        ktxroot = Path(ktxout).parent
+        ktxroot = str(Path(ktxout).parent)
         if outdir != ktxroot:
             Path(ktxroot).mkdir(parents=True, exist_ok=True)
             copyfile(tr_path, os.path.join(ktxroot, "transform.txt"))
@@ -505,6 +519,7 @@ def delete_temporary_files(tmpdir: str, task_num: int, maxbatch: int = 200):
         dask.compute(futures)
     logging.info("done")
 
+# loop over the chunks in the dask array.
 def save_tiff_blocks(input_slices: List[str], output_path: str, z: int, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array):
     futures = []
     bnum = pow(2, nlevels - 1)
@@ -627,7 +642,7 @@ def ktx_conversion(indir: str, outdir: str, nlevels: int, task_num: int, maxbatc
             dask.compute(futures)
         logging.info("done")
     
-    ktxroot = Path(outdir).parent
+    ktxroot = str(Path(outdir).parent)
     if ktxroot != indir:
         try:
             for fpath in glob.glob(os.path.join(indir, 'default.[0-9].tif')):
