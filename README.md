@@ -38,14 +38,14 @@ commandline arguments:
 examples: 
 
 1. use a local cluster.
-python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area
+python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d 2ndmax
 
 2. use a LSF cluster.
-python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d area --lsf --project scicompsoft --memory 12GB --maxjobs 10
+python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d 2ndmax --lsf --project scicompsoft --memory 12GB --maxjobs 10
 
 3. output a ktx octree without a tiff octree.
-python3 tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 --ktx --ktxout /output/octree/ktx
+python3 tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 --ktx --ktxout /output/octree/ktx -d 2ndmax
 
-4. specify a cluster by an address.
-python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree --cluster tcp://10.60.0.223:8786
+4. specify a cluster by its address.
+python3 tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree --cluster tcp://10.60.0.223:8786 -d spline
 ```
