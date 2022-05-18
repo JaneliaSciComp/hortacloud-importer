@@ -97,7 +97,7 @@ def downsample_spline3(out_tile_jl, coord, shape_leaf_px, scratch):
     down_img = ndimage.zoom(scratch, 0.5)
     out_tile_jl[bbox[0,0]:bbox[1,0], bbox[0,1]:bbox[1,1], bbox[0,2]:bbox[1,2]] = down_img.astype(scratch.dtype)
 
-def get_octree_relative_path(chunk_coord, level):
+def get_octree_relative_path(chunk_coord, level, sep=True):
     relpath = ''
     pos = np.asarray(chunk_coord)
     pos = np.add(pos, np.full(3, -1))
@@ -105,7 +105,10 @@ def get_octree_relative_path(chunk_coord, level):
         d = pow(2, lv)
         octant_path = str(1 + int(pos[2] / d) + 2 * int(pos[1] / d) + 4 * int(pos[0] / d))
         if lv < level-1:
-            relpath = os.path.join(relpath, octant_path)
+            if sep:
+                relpath = os.path.join(relpath, octant_path)
+            else:
+                relpath += octant_path
         pos[2] = pos[2] - int(pos[2] / d) * d
         pos[1] = pos[1] - int(pos[1] / d) * d
         pos[0] = pos[0] - int(pos[0] / d) * d
@@ -124,16 +127,19 @@ def get_cropped_image_rasterio(file_paths, z0, y0, x0, d, h, w, type, ch):
                 logging.error(err)
     return output
 
-def gen_blocks_from_slices_batch(chunk_coords, file_paths, target_path, nlevels, dim_leaf, ch, type, resolutions, chnum):
+def gen_blocks_from_slices_batch(chunk_coords, file_paths, target_path, nlevels, dim_leaf, ch, type, resolutions, chnum, resume):
     for pos in chunk_coords:
-        gen_block_from_slices(pos, file_paths, target_path, nlevels, dim_leaf, ch, type, resolutions, chnum)
+        gen_block_from_slices(pos, file_paths, target_path, nlevels, dim_leaf, ch, type, resolutions, chnum, resume)
 
-def gen_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_leaf, chid, type, resolutions, chnum):
+def gen_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_leaf, chid, type, resolutions, chnum, resume):
     relpath = get_octree_relative_path(chunk_coord, nlevels)
 
     dir_path = os.path.join(target_path, relpath)
     for ch in range(chnum):
         full_path = os.path.join(dir_path, "default.{0}.tif".format(chid+ch))
+        if resume and os.path.exists(full_path):
+            logging.info("skipped (exists): " + full_path)
+            continue
 
         #logging.info((dim_leaf[0]*chunk_coord[0], dim_leaf[1]*chunk_coord[1], dim_leaf[2]*chunk_coord[2]))
 
@@ -146,6 +152,17 @@ def gen_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_lea
         else:
             logging.info("skipped (empty): " + full_path)
 
+#return True if the block exists
+def check_block(chunk_coord, target_path, nlevels, chid, chnum):
+    relpath = get_octree_relative_path(chunk_coord, nlevels)
+
+    dir_path = os.path.join(target_path, relpath)
+    block_exists = True
+    for ch in range(chnum):
+        full_path = os.path.join(dir_path, "default.{0}.tif".format(chid+ch))
+        if not os.path.exists(full_path):
+            block_exists = False
+    return block_exists
 
 def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
     if block_id == None:
@@ -164,16 +181,25 @@ def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
 
     return np.array(block_id[0])[None, None, None] if block_id != None else np.array(0)[None, None, None]
 
-def downsample_and_save_block_batch(chunk_coords, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions):
+def downsample_and_save_block_batch(chunk_coords, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions, ktxdir, delete_source, resume):
     for pos in chunk_coords:
-        downsample_and_save_block(pos, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions)
+        downsample_and_save_block(pos, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions, ktxdir, delete_source, resume)
 
-def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions):
+def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions, ktxdir, delete_source, resume):
 
     relpath = get_octree_relative_path(chunk_coord, level)
 
     dir_path = os.path.join(target_path, relpath)
     img_name = "default.{0}.tif".format(ch)
+    full_path = os.path.join(dir_path, img_name)
+
+    if resume:
+        if os.path.exists(full_path):
+            return
+        if ktxdir:
+            ktx_name = 'block_8_xy_'+get_octree_relative_path(chunk_coord, level, False)+".ktx"
+            if os.path.exists(os.path.join(ktxdir, ktx_name)):
+                return
     
     img_down = np.zeros(dim_leaf, dtype=type)
     
@@ -192,8 +218,8 @@ def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, typ
             downsample_spline3(img_down, oct, dim_leaf, scratch)
         else:
             downsample_2ndmax(img_down, oct, dim_leaf, scratch)
-
-    full_path = os.path.join(dir_path, img_name)
+        if ktxdir:
+            convert_block_ktx_path(os.path.join(relpath, str(oct)), target_path, ktxdir, level+1, True, True, True, delete_source)
 
     logging.info(full_path)
 
@@ -204,19 +230,23 @@ def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, typ
             skimage.io.imsave(full_path, img_down, compress=6)
         else:
             skimage.io.imsave(full_path, img_down)
+            convert_block_ktx_path(relpath, target_path, ktxdir, level, True, True, True, delete_source)
 
 def convert_block_ktx_batch(chunk_coords, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source):
     for pos in chunk_coords:
         convert_block_ktx(pos, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source)
 
 def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source):
-
     relpath = get_octree_relative_path(chunk_coord, level)
-    dir_path = os.path.join(target_path, relpath)
-    if make_dir:
-        Path(dir_path).mkdir(parents=True, exist_ok=True)
+    convert_block_ktx_path(relpath, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source)
 
-    file_list = glob.glob(os.path.join(dir_path, 'default.[0-9].tif'))
+def convert_block_ktx_path(relpath, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source):
+    tardir_path = os.path.join(target_path, relpath)
+    if make_dir:
+        Path(tardir_path).mkdir(parents=True, exist_ok=True)
+
+    srcdir_path = os.path.join(source_path, relpath)
+    file_list = glob.glob(os.path.join(srcdir_path, 'default.[0-9].tif'))
     if len(file_list) == 0:
         return
 
@@ -262,15 +292,18 @@ def convert_block_ktx(chunk_coord, source_path, target_path, level, downsample_i
 
     if delete_source and level > 1:
         try:
-            for fpath in glob.glob(os.path.join(dir_path, 'default.[0-9].tif')):
+            for fpath in glob.glob(os.path.join(srcdir_path, 'default.[0-9].tif')):
                 os.remove(fpath)
         except OSError as err:
             logging.error(err)
             logging.error("Could not delete %s" % fpath)
 
-def conv_tiled_tiff(input, output, tilesize):
+def conv_tiled_tiff(input, output, tilesize, resume):
     if not os.path.exists(input):
         return input
+
+    if resume and os.path.exists(output):
+        return output
 
     is_tiled = True
     try:    
@@ -291,11 +324,11 @@ def conv_tiled_tiff(input, output, tilesize):
     
     return output
 
-def conv_tiled_tiffs(input_list, outdir, tilesize):
+def conv_tiled_tiffs(input_list, outdir, tilesize, resume):
     ret_list = []
     for fpath in input_list:
         fname = os.path.basename(fpath)
-        ret = conv_tiled_tiff(fpath, os.path.join(outdir, fname), tilesize)
+        ret = conv_tiled_tiff(fpath, os.path.join(outdir, fname), tilesize, resume)
         ret_list.append(ret)
     return ret_list
 
@@ -483,7 +516,7 @@ def save_transform_txt(
             Path(ktxout).mkdir(parents=True, exist_ok=True)
             copyfile(tr_path, os.path.join(ktxout, "transform.txt"))
 
-def covert_tiff_to_tiled_tiff(input_paths: List[str], task_num: int, outdir: str, maxbatch: int = 200):
+def covert_tiff_to_tiled_tiff(input_paths: List[str], task_num: int, outdir: str, maxbatch: int = 200, resume: bool = False):
     slice_files = input_paths
     futures = []
     logging.info("tiff-to-tiled-tiff conversion")
@@ -494,7 +527,7 @@ def covert_tiff_to_tiled_tiff(input_paths: List[str], task_num: int, outdir: str
         batch_slice_num = 1
     chunked_tif_list = np.array_split(slice_files, (int)(len(slice_files) / batch_slice_num))
     for tlist in chunked_tif_list:
-        future = dask.delayed(conv_tiled_tiffs)(tlist, outdir, (256, 256))
+        future = dask.delayed(conv_tiled_tiffs)(tlist, outdir, (256, 256), resume)
         futures.append(future)
     with ProgressBar():
         results = dask.compute(futures)
@@ -520,7 +553,7 @@ def delete_temporary_files(tmpdir: str, task_num: int, maxbatch: int = 200):
     logging.info("done")
 
 # loop over the chunks in the dask array.
-def save_tiff_blocks(input_slices: List[str], output_path: str, z: int, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array):
+def save_tiff_blocks(input_slices: List[str], output_path: str, z: int, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array, resume: bool):
     futures = []
     bnum = pow(2, nlevels - 1)
     volume_dtype = darray.dtype
@@ -538,16 +571,35 @@ def save_tiff_blocks(input_slices: List[str], output_path: str, z: int, nlevels:
         for x in range(1, bnum+1):
             coord_list.append((z,y,x))
             if len(coord_list) >= batch_block_num:
-                future = dask.delayed(gen_blocks_from_slices_batch)(coord_list, input_slices, output_path, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel)
+                future = dask.delayed(gen_blocks_from_slices_batch)(coord_list, input_slices, output_path, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel, resume)
                 futures.append(future)
                 coord_list = []
     if len(coord_list) > 0:
-        future = dask.delayed(gen_blocks_from_slices_batch)(coord_list, input_slices, output_path, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel)
+        future = dask.delayed(gen_blocks_from_slices_batch)(coord_list, input_slices, output_path, nlevels, dim_leaf, ch, volume_dtype, vs, samples_per_pixel, resume)
         futures.append(future)
     with ProgressBar():
         dask.compute(futures)
 
-def gen_highest_resolution_blocks_from_slices(indirs: List[str], output_path: str, tmpdir_path: str, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array):
+def check_tiff_blocks(output_path: str, z: int, nlevels: int, ch: int, darray: da.Array):
+    futures = []
+    bnum = pow(2, nlevels - 1)
+    samples_per_pixel = darray.shape[3]
+    for y in range(1, bnum+1):
+        for x in range(1, bnum+1):
+            future = dask.delayed(check_block)((z,y,x), output_path, nlevels, ch, samples_per_pixel)
+            futures.append(future)
+    with ProgressBar():
+        dask_result = dask.compute(*futures)
+
+    ret = True
+    for b in dask_result:
+        if not b:
+            ret = False
+            break
+    return ret
+    #dlist = [item for sublist in dask_result for item in sublist]
+
+def gen_highest_resolution_blocks_from_slices(indirs: List[str], output_path: str, tmpdir_path: str, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array, resume: bool):
     dim_leaf = darray.chunksize[:3]
     if darray.shape[2] >= 8192:
         tiled_tif_conversion = True
@@ -563,11 +615,14 @@ def gen_highest_resolution_blocks_from_slices(indirs: List[str], output_path: st
         chunked_list = [img_files[j:j+dim_leaf[0]] for j in range(0, len(img_files), dim_leaf[0])]
         bnum = pow(2, nlevels - 1)
         for z in range(1, bnum+1):
+            if resume and check_tiff_blocks(output_path=output_path, z=z, nlevels=nlevels, ch=ch, darray=darray):
+                continue
+
             slice_files = chunked_list[z-1]
             if tiled_tif_conversion:
-                slice_files = covert_tiff_to_tiled_tiff(input_paths=slice_files, task_num=task_num, outdir=output_path, maxbatch=maxbatch)
+                slice_files = covert_tiff_to_tiled_tiff(input_paths=slice_files, task_num=task_num, outdir=output_path, maxbatch=maxbatch, resume=resume)
 
-            save_tiff_blocks(input_slices=slice_files, output_path=output_path, z=z, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch+i, voxel_size_str=voxel_size_str, darray=darray)
+            save_tiff_blocks(input_slices=slice_files, output_path=output_path, z=z, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch+i, voxel_size_str=voxel_size_str, darray=darray, resume=resume)
 
             if tiled_tif_conversion:
                 delete_temporary_files(tmpdir=tmpdir_path, task_num=task_num, maxbatch=maxbatch)  
@@ -582,9 +637,25 @@ def gen_highest_resolution_blocks_from_stack(infiles: List[str], output_path: st
         volume = adjusted.rechunk(dim_leaf)
         volume.map_blocks(save_block, output_path, nlevels, dim_leaf, ch+i, chunks=(1,1,1)).compute()
 
-def downsample_octree_blocks(output_path: str, method: str, nlevels: int, task_num: int, maxbatch: int, ch_ids: List[int], voxel_size_str: str, darray: da.Array):
+def downsample_octree_blocks(output_path: str, method: str, nlevels: int, task_num: int, maxbatch: int, ch_ids: List[int], voxel_size_str: str, darray: da.Array, ktxdir: str, delete_source: bool, resume: bool):
     dim_leaf = darray.chunksize[:3]
+
+    dummy_img = np.zeros(dim_leaf, dtype=darray.dtype)
+    cfpath = os.path.join(output_path, "dummy_generated")
+    dummy_exists = False
+    for ch in ch_ids:
+        img_name = "default.{0}.tif".format(ch)
+        full_path = os.path.join(output_path, img_name)
+        if not resume or (resume and not os.path.exists(full_path)):
+            skimage.io.imsave(full_path, dummy_img)
+            dummy_exists = True
+    if dummy_exists:
+        with open(cfpath, 'w') as fp:
+            pass
+
     for lv in range(nlevels-1, 0, -1):
+        if lv == 1 and os.path.exists(cfpath):
+            resume = False
         logging.info("downsampling level " + str(lv+1))
         futures = []
         bnum = pow(2, lv - 1)
@@ -602,15 +673,19 @@ def downsample_octree_blocks(output_path: str, method: str, nlevels: int, task_n
                     for c in ch_ids:
                         coord_list.append((z,y,x))
                         if len(coord_list) >= batch_block_num:
-                            future = dask.delayed(downsample_and_save_block_batch)(coord_list, output_path, lv, dim_leaf, c, darray.dtype, method, vs)
+                            future = dask.delayed(downsample_and_save_block_batch)(coord_list, output_path, lv, dim_leaf, c, darray.dtype, method, vs, ktxdir, delete_source, resume)
                             futures.append(future)
                             coord_list = []
         if len(coord_list) > 0:
-            future = dask.delayed(downsample_and_save_block_batch)(coord_list, output_path, lv, dim_leaf, c, darray.dtype, method, vs)
+            future = dask.delayed(downsample_and_save_block_batch)(coord_list, output_path, lv, dim_leaf, c, darray.dtype, method, vs, ktxdir, delete_source, resume)
             futures.append(future)
         with ProgressBar():
             dask.compute(futures)
         logging.info("done")
+
+    if os.path.exists(cfpath):
+        os.remove(cfpath)
+
 
 def ktx_conversion(indir: str, outdir: str, nlevels: int, task_num: int, maxbatch: int, delete_source: bool):
     if outdir != indir:
@@ -681,6 +756,7 @@ def build_octree_from_tiff_slices():
     parser.add_argument("--ktxout", dest="ktxout", type=str, default=None, help="output directory for a ktx octree")
     parser.add_argument("--cluster", dest="cluster", type=str, default=None, help="address of a dask scheduler server")
     parser.add_argument("--verbose", dest="verbose", default=False, action="store_true", help="enable verbose logging")
+    parser.add_argument("--resume", dest="resume", default=False, action="store_true", help="resume processing")
 
     if not argv:
         parser.print_help()
@@ -703,6 +779,7 @@ def build_octree_from_tiff_slices():
     ktxonly = args.ktxonly
     ktx = args.ktx
     ktx_mkdir = False
+    resume = args.resume
 
     if ktxout and not outdir:
         ktxonly = True
@@ -778,6 +855,12 @@ def build_octree_from_tiff_slices():
     logging.info("Image type: " + str(volume_dtype))
     logging.info("samples per pixel: " + str(samples_per_pixel))
     logging.info("Adjusted image size: " + str(dim) + ", Dim leaf: " + str(dim_leaf))
+    logging.info("KTX directory: " + str(ktxout))
+
+    cfpath = os.path.join(outdir, "do_step1")
+    if not resume or (resume and not os.path.exists(os.path.join(outdir, "transform.txt"))):
+        with open(cfpath, 'w') as fp:
+            pass
 
     save_transform_txt(outdir=outdir, origin=args.origin, voxsize=args.voxsize, nlevels=nlevels, ktxout=ktxout)
 
@@ -787,16 +870,22 @@ def build_octree_from_tiff_slices():
     else:
         ch_ids = [ch+i for i in range(0, len(indirs))]
 
-    #save the highest level
-    if len(indirs) > 0: # image slices
-        gen_highest_resolution_blocks_from_slices(indirs=indirs, output_path=outdir, tmpdir_path=tmpdir, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch, voxel_size_str=args.voxsize, darray=darray)
-    elif len(infiles) > 0: #tif stack
-        gen_highest_resolution_blocks_from_stack(infiles=infiles, output_path=outdir, nlevels=nlevels, ch=ch, darray=darray)
+    if resume and not os.path.exists(cfpath):
+        logging.info("Skipped gen_highest_resolution_blocks_from_slices.")
+    else:
+        #save the highest level
+        if len(indirs) > 0: # image slices
+            gen_highest_resolution_blocks_from_slices(indirs=indirs, output_path=outdir, tmpdir_path=tmpdir, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch, voxel_size_str=args.voxsize, darray=darray, resume=resume)
+        elif len(infiles) > 0: #tif stack
+            gen_highest_resolution_blocks_from_stack(infiles=infiles, output_path=outdir, nlevels=nlevels, ch=ch, darray=darray)
 
-    downsample_octree_blocks(output_path=outdir, method=dmethod, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch_ids=ch_ids, voxel_size_str=args.voxsize, darray=darray)
+    if os.path.exists(cfpath):
+        os.remove(cfpath)
 
-    if ktx:
-        ktx_conversion(indir=outdir, outdir=ktxout, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, delete_source=ktxonly)
+    downsample_octree_blocks(output_path=outdir, method=dmethod, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch_ids=ch_ids, voxel_size_str=args.voxsize, darray=darray, ktxdir=ktxout, delete_source=ktxonly, resume=resume)
+
+    #if ktx:
+    #    ktx_conversion(indir=outdir, outdir=ktxout, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, delete_source=ktxonly)
 
     try:
         if os.path.isdir(tmpdir):
