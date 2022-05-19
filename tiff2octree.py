@@ -689,7 +689,7 @@ def covert_tiff_to_tiled_tiff(input_paths: List[str], task_num: int, outdir: str
     chunked_tif_list = np.array_split(slice_files, (int)(len(slice_files) / batch_slice_num))
     logging.info("tiff-to-tiled-tiff conversion: list " + str(len(chunked_tif_list)))
     for tlist in chunked_tif_list:
-        logging.info(tlist)
+        #logging.info(tlist)
         future = dask.delayed(conv_tiled_tiffs)(tlist, outdir, (256, 256), resume)
         futures.append(future)
     with ProgressBar():
