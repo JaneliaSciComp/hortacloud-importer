@@ -537,6 +537,8 @@ def covert_tiff_to_tiled_tiff(input_paths: List[str], task_num: int, outdir: str
 def delete_temporary_files(tmpdir: str, task_num: int, maxbatch: int = 200):
     logging.info("deleting temporary files...")
     tlist = [entry.path for entry in scantree(tmpdir)]
+    if len(tlist) == 0:
+        return
     batch_file_num = len(tlist) / task_num
     if maxbatch > 0 and batch_file_num > maxbatch:
         batch_file_num = maxbatch
@@ -600,7 +602,7 @@ def check_tiff_blocks(output_path: str, z: int, nlevels: int, ch: int, darray: d
 
 def gen_highest_resolution_blocks_from_slices(indirs: List[str], output_path: str, tmpdir_path: str, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array, resume: bool):
     dim_leaf = darray.chunksize[:3]
-    if darray.shape[2] >= 8192:
+    if darray.shape[2] >= 192:
         tiled_tif_conversion = True
         Path(tmpdir_path).mkdir(parents=True, exist_ok=True)
     else:
@@ -619,7 +621,7 @@ def gen_highest_resolution_blocks_from_slices(indirs: List[str], output_path: st
 
             slice_files = chunked_list[z-1]
             if tiled_tif_conversion:
-                slice_files = covert_tiff_to_tiled_tiff(input_paths=slice_files, task_num=task_num, outdir=output_path, maxbatch=maxbatch, resume=resume)
+                slice_files = covert_tiff_to_tiled_tiff(input_paths=slice_files, task_num=task_num, outdir=tmpdir_path, maxbatch=maxbatch, resume=resume)
 
             save_tiff_blocks(input_slices=slice_files, output_path=output_path, z=z, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch+i, voxel_size_str=voxel_size_str, darray=darray, resume=resume)
 
@@ -681,6 +683,17 @@ def downsample_octree_blocks(output_path: str, method: str, nlevels: int, task_n
         with ProgressBar():
             dask.compute(futures)
         logging.info("done")
+    
+    ktxroot = str(Path(ktxdir).parent)
+    if ktxroot != output_path:
+        try:
+            for fpath in glob.glob(os.path.join(output_path, 'default.[0-9].tif')):
+                fname = os.path.basename(fpath)
+                copyfile(fpath, os.path.join(ktxroot, fname))
+                os.remove(fpath)
+        except Exception as err:
+            logging.error(err)
+            logging.error("Could not copy the lowest resolution tif images.")
 
     if os.path.exists(cfpath):
         os.remove(cfpath)
@@ -858,6 +871,7 @@ def build_octree_from_tiff_slices():
 
     cfpath = os.path.join(outdir, "do_step1")
     if not resume or (resume and not os.path.exists(os.path.join(outdir, "transform.txt"))):
+        Path(outdir).mkdir(parents=True, exist_ok=True)
         with open(cfpath, 'w') as fp:
             pass
 
