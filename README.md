@@ -33,6 +33,7 @@ commandline arguments:
   --ktx                 generate ktx files
   --ktxout KTXOUT       output directory for a ktx octree
   --cluster CLUSTER     address of a dask scheduler server
+  --resume              resume processing
 
 
 examples: 
