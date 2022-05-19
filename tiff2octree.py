@@ -221,16 +221,15 @@ def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, typ
         if ktxdir:
             convert_block_ktx_path(os.path.join(relpath, str(oct)), target_path, ktxdir, level+1, True, True, True, delete_source)
 
-    logging.info(full_path)
-
-    if img_down.max() > 0:
-        logging.info(full_path)
-        Path(dir_path).mkdir(parents=True, exist_ok=True)
-        if level > 1:
+    Path(dir_path).mkdir(parents=True, exist_ok=True)
+    if level > 1:
+        if img_down.max() > 0:
+            logging.info(full_path)
             skimage.io.imsave(full_path, img_down, compress=6)
-        else:
-            skimage.io.imsave(full_path, img_down)
-            convert_block_ktx_path(relpath, target_path, ktxdir, level, True, True, True, delete_source)
+    else:
+        logging.info(full_path)
+        skimage.io.imsave(full_path, img_down)
+        convert_block_ktx_path(relpath, target_path, ktxdir, level, True, True, True, False)
 
 def convert_block_ktx_batch(chunk_coords, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source):
     for pos in chunk_coords:
