@@ -1,4 +1,4 @@
-name: octree2
+name: octree
 channels:
   - conda-forge
   - defaults
@@ -17,4 +17,4 @@ dependencies:
   - pylibtiff
   - bitarray
   - rasterio
-prefix: /groups/scicompsoft/home/kawaset/miniconda3/envs/octree2
+prefix: /groups/scicompsoft/home/kawaset/miniconda3/envs/octree
