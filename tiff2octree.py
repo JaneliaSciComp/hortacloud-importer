@@ -305,7 +305,7 @@ def gen_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_lea
         if img_data.max() > 0:
             logging.info(full_path)
             Path(dir_path).mkdir(parents=True, exist_ok=True)
-            skimage.io.imsave(full_path, img_data, compress=6)
+            skimage.io.imsave(full_path, img_data, compression=("ZLIB", 6))
         else:
             logging.info("skipped (empty): " + full_path)
 
@@ -334,7 +334,7 @@ def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
 
     logging.info(full_path)
 
-    skimage.io.imsave(full_path, chunk, compress=6)
+    skimage.io.imsave(full_path, chunk, compression=("ZLIB", 6))
 
     return np.array(block_id[0])[None, None, None] if block_id != None else np.array(0)[None, None, None]
 
@@ -382,7 +382,7 @@ def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, typ
     if level > 1:
         if img_down.max() > 0:
             logging.info(full_path)
-            skimage.io.imsave(full_path, img_down, compress=6)
+            skimage.io.imsave(full_path, img_down, compression=("ZLIB", 6))
     else:
         logging.info(full_path)
         skimage.io.imsave(full_path, img_down)
@@ -472,7 +472,7 @@ def conv_tiled_tiff(input, output, tilesize, resume):
     if not is_tiled:
         try:
             img = skimage.io.imread(input)
-            skimage.io.imsave(output, img, compress=6, tile=tilesize)
+            skimage.io.imsave(output, img, compression=("ZLIB", 6), tile=tilesize)
             logging.info("saved tiled-tiff: " + output)
         except Exception:
             logging.error("failed to convert: " + output)
@@ -767,7 +767,7 @@ def check_tiff_blocks(output_path: str, z: int, nlevels: int, ch: int, darray: d
 
 def gen_highest_resolution_blocks_from_slices(indirs: List[str], output_path: str, tmpdir_path: str, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array, resume: bool):
     dim_leaf = darray.chunksize[:3]
-    if darray.shape[2] >= 192:
+    if darray.shape[2] >= 8192:
         tiled_tif_conversion = True
         Path(tmpdir_path).mkdir(parents=True, exist_ok=True)
     else:
