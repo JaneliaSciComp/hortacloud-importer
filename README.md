@@ -12,7 +12,7 @@ a tiff-to-octree converter for dask
 ```
 commandline arguments:
   -h, --help                              show this help message and exit
-  -n NUMBER, --thread NUMBER              number of threads (default: 16)
+  -t NUMBER, --thread NUMBER              number of threads (default: 16)
   -i INPUT, --inputdir INPUT              input directory
   -f FILE, --inputfile FILE               input image stack
   -o OUTPUT, --output OUTPUT              output directory
