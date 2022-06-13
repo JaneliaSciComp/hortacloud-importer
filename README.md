@@ -33,20 +33,29 @@ commandline arguments:
   --ktx                 generate ktx files
   --ktxout KTXOUT       output directory for a ktx octree
   --cluster CLUSTER     address of a dask scheduler server
+  --verbose             enable vorbose logging
   --resume              resume processing
 
 
 examples: 
 
-1. use a local cluster.
-python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d 2ndmax
+1. use a local cluster. (process image slices)
+conda activate octree
+python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d 2ndmax -t 16
 
-2. use a LSF cluster.
-python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d 2ndmax --lsf --project scicompsoft --memory 12GB --maxjobs 10
+2. use a local cluster. (process image stack)
+conda activate octree
+python tiff2octree.py -f /path/to/tiff_stack.tif -l 3 -o /output/octree -d 2ndmax -t 16
 
-3. output a ktx octree without a tiff octree.
-python tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 --ktx --ktxout /output/octree/ktx -d 2ndmax
+3. use a LSF cluster.
+conda activate octree
+python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d 2ndmax --lsf --project scicompsoft --memory 12GB --maxjobs 10 -t 10
 
-4. specify a cluster by its address.
-python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree --cluster tcp://10.60.0.223:8786 -d spline
+4. output a ktx octree without a tiff octree.
+conda activate octree
+python tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 --ktx --ktxout /output/octree/ktx -d 2ndmax -t 16
+
+5. specify a cluster by its address.
+conda activate octree
+python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree --cluster tcp://10.60.0.223:8786 -d spline -t 16
 ```

@@ -324,6 +324,8 @@ def check_block(chunk_coord, target_path, nlevels, chid, chnum):
 def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
     if block_id == None:
         return np.array(0)[None, None, None]
+
+    block_id = [i+1 for i in block_id]
     
     relpath = get_octree_relative_path(block_id, nlevels)
 
@@ -531,7 +533,7 @@ def setup_cluster(
     dashboard_address = None
     if monitoring: 
         dashboard_address = ":8787"
-        print(f"Starting dashboard on {dashboard_address}")
+        logging.info(f"Starting dashboard on {dashboard_address}")
         client = Client(address=cluster, processes=True, dashboard_address=dashboard_address)
     else:
         client = Client(address=cluster)
@@ -552,15 +554,18 @@ def stack_to_dask_array(
     ret = None
     if file_path:
         img = dask_image.imread.imread(file_path)
+        img = img[..., np.newaxis]
 
-        dim = np.asarray(img.shape)
+        logging.info("Image size: " + str(img.shape))
+
+        dim = np.asarray(img.shape)[:3]
         dim = adjust_dimensions(dim, nlevels)
         dim_leaf = [x >> (nlevels - 1) for x in dim]
 
         logging.info("Adjusted image size: " + str(dim) + ", Dim leaf: " + str(dim_leaf))
 
-        adjusted = img[:dim[0], :dim[1], :dim[2]]
-        ret = adjusted.rechunk(dim_leaf)
+        adjusted = img[:dim[0], :dim[1], :dim[2], :]
+        ret = adjusted.rechunk((dim_leaf[0], dim_leaf[1], dim_leaf[2], 1))
     return ret
 
 def slice_to_dask_array(
@@ -1052,7 +1057,7 @@ def build_octree_from_tiff_slices():
         logging.info("Skipped gen_highest_resolution_blocks_from_slices.")
     else:
         #save the highest level
-        if len(indirs) > 0: # image slices
+        if len(indirs) > 0 and indirs[0] != "": # image slices
             gen_highest_resolution_blocks_from_slices(indirs=indirs, output_path=outdir, tmpdir_path=tmpdir, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch, voxel_size_str=args.voxsize, darray=darray, resume=resume)
         elif len(infiles) > 0: #tif stack
             gen_highest_resolution_blocks_from_stack(infiles=infiles, output_path=outdir, nlevels=nlevels, ch=ch, darray=darray)
