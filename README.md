@@ -54,7 +54,7 @@ python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d 2ndmax --l
 
 4. output a ktx octree without a tiff octree.
 conda activate octree
-python tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 --ktx --ktxout /output/octree/ktx -d 2ndmax -t 16
+python tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 -o /output/octree/ -ktxonly -d 2ndmax -t 8
 
 5. specify a cluster by its address.
 conda activate octree
