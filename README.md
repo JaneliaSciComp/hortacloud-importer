@@ -7,6 +7,7 @@ a tiff-to-octree converter for dask
 3. Run ```conda env create -f environment.yml```
 4. Run ```conda activate octree```
 5. Run ```pip install /path/to/pyktx```
+6. Run ```conda config --set auto_activate_base false``` (for LSF cluster)
 
 ## Usage
 ```
