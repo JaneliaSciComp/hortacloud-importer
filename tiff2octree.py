@@ -281,6 +281,7 @@ def get_cropped_image_rasterio(file_paths, z0, y0, x0, d, h, w, type, ch):
                     data = src.read(ch+1, window=Window(x0, y0, w, h))
                     output[i - z0, :h, :w] = data[:, :]
             except BaseException as err:
+                logging.error(file_paths[i - z0])
                 logging.error(err)
     return output
 
@@ -340,55 +341,66 @@ def save_block(chunk, target_path, nlevels, dim_leaf, ch, block_id=None):
 
     return np.array(block_id[0])[None, None, None] if block_id != None else np.array(0)[None, None, None]
 
-def downsample_and_save_block_batch(chunk_coords, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions, ktxdir, delete_source, resume):
+def downsample_and_save_block_batch(chunk_coords, target_path, level, dim_leaf, type, downsampling_method, resolutions, ktxdir, delete_source, resume):
     for pos in chunk_coords:
-        downsample_and_save_block(pos, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions, ktxdir, delete_source, resume)
+        downsample_and_save_block(pos, target_path, level, dim_leaf, type, downsampling_method, resolutions, ktxdir, delete_source, resume)
 
-def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, ch, type, downsampling_method, resolutions, ktxdir, delete_source, resume):
+def downsample_and_save_block(chunk_coord, target_path, level, dim_leaf, type, downsampling_method, resolutions, ktxdir, delete_source, resume):
 
     relpath = get_octree_relative_path(chunk_coord, level)
 
     dir_path = os.path.join(target_path, relpath)
-    img_name = "default.{0}.tif".format(ch)
-    full_path = os.path.join(dir_path, img_name)
 
     if resume:
-        if os.path.exists(full_path):
-            return
         if ktxdir:
             ktx_name = 'block_8_xy_'+get_octree_relative_path(chunk_coord, level, False)+".ktx"
             if os.path.exists(os.path.join(ktxdir, ktx_name)):
                 return
     
-    img_down = np.zeros(dim_leaf, dtype=type)
+    downsampled_images = {}
     
     for oct in range(1, 9):
-        blk_path = os.path.join(os.path.join(dir_path, str(oct)), img_name)
-        try:
-            scratch = skimage.io.imread(blk_path)
-        except:
-            logging.info("empty: " + blk_path)
-            continue
-        if downsampling_method == 'area':
-            downsample_area(img_down, oct, dim_leaf, scratch)
-        elif downsampling_method == 'aa':
-            downsample_aa(img_down, oct, dim_leaf, scratch)
-        elif downsampling_method == 'spline':
-            downsample_spline3(img_down, oct, dim_leaf, scratch)
-        else:
-            downsample_2ndmax(img_down, oct, dim_leaf, scratch)
+        down_dir = os.path.join(dir_path, str(oct))
+        file_list = glob.glob(os.path.join(down_dir, 'default.[0-9].tif'))
+        for full_path in file_list:
+            img_name = os.path.basename(full_path)
+            if resume and os.path.exists(os.path.join(dir_path, img_name)):
+                continue
+
+            if not img_name in downsampled_images.keys():
+                downsampled_images[img_name] = np.zeros(dim_leaf, dtype=type)
+
+            blk_path = os.path.join(os.path.join(dir_path, str(oct)), img_name)
+            try:
+                scratch = skimage.io.imread(blk_path)
+            except:
+                logging.info("empty: " + blk_path)
+                continue
+            if downsampling_method == 'area':
+                downsample_area(downsampled_images[img_name], oct, dim_leaf, scratch)
+            elif downsampling_method == 'aa':
+                downsample_aa(downsampled_images[img_name], oct, dim_leaf, scratch)
+            elif downsampling_method == 'spline':
+                downsample_spline3(downsampled_images[img_name], oct, dim_leaf, scratch)
+            else:
+                downsample_2ndmax(downsampled_images[img_name], oct, dim_leaf, scratch)
         if ktxdir:
             convert_block_ktx_path(os.path.join(relpath, str(oct)), target_path, ktxdir, level+1, True, True, True, delete_source)
 
     Path(dir_path).mkdir(parents=True, exist_ok=True)
     if level > 1:
-        if img_down.max() > 0:
-            logging.info(full_path)
-            skimage.io.imsave(full_path, img_down, compression=("ZLIB", 6))
+        for img_name in downsampled_images.keys():
+            if downsampled_images[img_name].max() > 0:
+                full_path = os.path.join(dir_path, img_name)
+                logging.info(full_path)
+                skimage.io.imsave(full_path, downsampled_images[img_name], compression=("ZLIB", 6))
     else:
-        logging.info(full_path)
-        skimage.io.imsave(full_path, img_down)
-        convert_block_ktx_path(relpath, target_path, ktxdir, level, True, True, True, False)
+        for img_name in downsampled_images.keys():
+            full_path = os.path.join(dir_path, img_name)
+            logging.info(full_path)
+            skimage.io.imsave(full_path, downsampled_images[img_name])
+        if ktxdir:
+            convert_block_ktx_path(relpath, target_path, ktxdir, level, True, True, True, False)
 
 def convert_block_ktx_batch(chunk_coords, source_path, target_path, level, downsample_intensity, downsample_xy, make_dir, delete_source):
     for pos in chunk_coords:
@@ -464,19 +476,30 @@ def conv_tiled_tiff(input, output, tilesize, resume):
         return output
 
     is_tiled = True
-    try:    
-        tif = TiffFile(input)
-        is_tiled = tif.pages[0].is_tiled
-        tif.close()
-    except Exception:
+    is_jpeg = False
+    if input.endswith('.tif'):
+        try:
+            tif = TiffFile(input)
+            is_tiled = tif.pages[0].is_tiled
+            tif.close()
+        except Exception:
+            return input
+    elif input.endswith('.jp2'):
+        is_jpeg = True
+        is_tiled = False
+    else:
         return input
 
     if not is_tiled:
         try:
-            img = skimage.io.imread(input)
+            if is_jpeg:
+                img = rasterio.open(input).read()
+            else:
+                img = skimage.io.imread(input)
             skimage.io.imsave(output, img, compression=("ZLIB", 6), tile=tilesize)
             logging.info("saved tiled-tiff: " + output)
-        except Exception:
+        except Exception as err:
+            logging.error(err)
             logging.error("failed to convert: " + output)
             return input
     
@@ -485,7 +508,7 @@ def conv_tiled_tiff(input, output, tilesize, resume):
 def conv_tiled_tiffs(input_list, outdir, tilesize, resume):
     ret_list = []
     for fpath in input_list:
-        fname = os.path.basename(fpath)
+        fname = os.path.splitext(os.path.basename(fpath))[0] + ".tif"
         ret = conv_tiled_tiff(fpath, os.path.join(outdir, fname), tilesize, resume)
         ret_list.append(ret)
     return ret_list
@@ -772,7 +795,7 @@ def check_tiff_blocks(output_path: str, z: int, nlevels: int, ch: int, darray: d
 
 def gen_highest_resolution_blocks_from_slices(indirs: List[str], output_path: str, tmpdir_path: str, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array, resume: bool):
     dim_leaf = darray.chunksize[:3]
-    if darray.shape[2] >= 8192:
+    if darray.shape[2] >= 8192 or darray.shape[1] >= 8192:
         tiled_tif_conversion = True
         Path(tmpdir_path).mkdir(parents=True, exist_ok=True)
     else:
@@ -841,29 +864,29 @@ def downsample_octree_blocks(output_path: str, method: str, nlevels: int, task_n
         for z in range(1, bnum+1):
             for y in range(1, bnum+1):
                 for x in range(1, bnum+1):
-                    for c in ch_ids:
-                        coord_list.append((z,y,x))
-                        if len(coord_list) >= batch_block_num:
-                            future = dask.delayed(downsample_and_save_block_batch)(coord_list, output_path, lv, dim_leaf, c, darray.dtype, method, vs, ktxdir, delete_source, resume)
-                            futures.append(future)
-                            coord_list = []
+                    coord_list.append((z,y,x))
+                    if len(coord_list) >= batch_block_num:
+                        future = dask.delayed(downsample_and_save_block_batch)(coord_list, output_path, lv, dim_leaf, darray.dtype, method, vs, ktxdir, delete_source, resume)
+                        futures.append(future)
+                        coord_list = []
         if len(coord_list) > 0:
-            future = dask.delayed(downsample_and_save_block_batch)(coord_list, output_path, lv, dim_leaf, c, darray.dtype, method, vs, ktxdir, delete_source, resume)
+            future = dask.delayed(downsample_and_save_block_batch)(coord_list, output_path, lv, dim_leaf, darray.dtype, method, vs, ktxdir, delete_source, resume)
             futures.append(future)
         with ProgressBar():
             dask.compute(futures)
         logging.info("done")
     
-    ktxroot = str(Path(ktxdir).parent)
-    if ktxroot != output_path:
-        try:
-            for fpath in glob.glob(os.path.join(output_path, 'default.[0-9].tif')):
-                fname = os.path.basename(fpath)
-                copyfile(fpath, os.path.join(ktxroot, fname))
-                os.remove(fpath)
-        except Exception as err:
-            logging.error(err)
-            logging.error("Could not copy the lowest resolution tif images.")
+    if ktxdir:
+        ktxroot = str(Path(ktxdir).parent)
+        if ktxroot != output_path:
+            try:
+                for fpath in glob.glob(os.path.join(output_path, 'default.[0-9].tif')):
+                    fname = os.path.basename(fpath)
+                    copyfile(fpath, os.path.join(ktxroot, fname))
+                    os.remove(fpath)
+            except Exception as err:
+                logging.error(err)
+                logging.error("Could not copy the lowest resolution tif images.")
 
     if os.path.exists(cfpath):
         os.remove(cfpath)
