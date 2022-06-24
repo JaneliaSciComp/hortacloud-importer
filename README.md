@@ -1,5 +1,5 @@
 # hortacloud-importer
-a tiff-to-octree converter for HortaCloud.
+a tiff-to-octree converter for Horta.
 
 ## Initial Setup
 1. Install miniconda (https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
