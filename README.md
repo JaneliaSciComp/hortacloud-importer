@@ -1,5 +1,5 @@
-# tiff2octree
-a tiff-to-octree converter for dask
+# hortacloud-importer
+a tiff-to-octree converter for HortaCloud.
 
 ## Initial Setup
 1. Install miniconda (https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
