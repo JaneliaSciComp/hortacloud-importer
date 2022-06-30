@@ -570,11 +570,22 @@ def adjust_dimensions(dim, nlevels):
             ret[i] -= 1
     return ret
 
+def calc_optimal_nlevels(dim):
+    lv = 1
+    while True:
+        dim = adjust_dimensions(dim, lv)
+        dim_leaf = [x >> (lv - 1) for x in dim]
+        if dim_leaf[0]*dim_leaf[1]*dim_leaf[2] < 512*512*512:
+            break
+        lv += 1
+    return lv
+
 def stack_to_dask_array(
     file_path: str,
     nlevels: int
     ):
     ret = None
+    lv = nlevels
     if file_path:
         img = dask_image.imread.imread(file_path)
         img = img[..., np.newaxis]
@@ -582,14 +593,17 @@ def stack_to_dask_array(
         logging.info("Image size: " + str(img.shape))
 
         dim = np.asarray(img.shape)[:3]
-        dim = adjust_dimensions(dim, nlevels)
-        dim_leaf = [x >> (nlevels - 1) for x in dim]
+        if lv < 1:
+            lv = calc_optimal_nlevels(dim)
+        
+        dim = adjust_dimensions(dim, lv)
+        dim_leaf = [x >> (lv - 1) for x in dim]
 
         logging.info("Adjusted image size: " + str(dim) + ", Dim leaf: " + str(dim_leaf))
 
         adjusted = img[:dim[0], :dim[1], :dim[2], :]
         ret = adjusted.rechunk((dim_leaf[0], dim_leaf[1], dim_leaf[2], 1))
-    return ret
+    return (ret, lv)
 
 def slice_to_dask_array(
     indir: str,
@@ -599,6 +613,7 @@ def slice_to_dask_array(
     images = None
     dim = None
     volume_dtype = None
+    lv = nlevels
     if indir:
         img_files = [os.path.join(indir, f) for f in os.listdir(indir) if f.endswith(('.tif', '.jp2'))]
         im_width = 0
@@ -618,14 +633,17 @@ def slice_to_dask_array(
                 volume_dtype = src.dtypes[0]
 
         dim = np.asarray((len(img_files), im_height, im_width))
-        dim = adjust_dimensions(dim, nlevels)
-        dim_leaf = [x >> (nlevels - 1) for x in dim]
+        if lv < 1:
+            lv = calc_optimal_nlevels(dim)
+
+        dim = adjust_dimensions(dim, lv)
+        dim_leaf = [x >> (lv - 1) for x in dim]
 
         logging.info("Adjusted image size: " + str(dim) + ", Dim leaf: " + str(dim_leaf))
 
         ret = da.zeros((dim[0], dim[1], dim[2], samples_per_pixel), chunks=(dim_leaf[0], dim_leaf[1], dim_leaf[2], samples_per_pixel), dtype=volume_dtype)
     
-    return ret
+    return (ret, lv)
 
 def parse_voxel_size(voxel_size_str: str):
     vsstr = voxel_size_str.split(",")
@@ -944,7 +962,7 @@ def build_octree_from_tiff_slices():
     parser.add_argument("-i", "--inputdir", dest="input", type=str, default="", help="input directories")
     parser.add_argument("-f", "--inputfile", dest="file", type=str, default="", help="input image stacks")
     parser.add_argument("-o", "--output", dest="output", type=str, default=None, help="output directory")
-    parser.add_argument("-l", "--level", dest="level", type=int, default=1, help="number of levels")
+    parser.add_argument("-l", "--level", dest="level", type=int, default=-1, help="number of levels")
     parser.add_argument("-c", "--channel", dest="channel", type=int, default=0, help="channel id")
     parser.add_argument("-d", "--downsample", dest="downsample", type=str, default='area', help="downsample method: 2ndmax, area, aa(anti-aliasing), spline")
     parser.add_argument("-m", "--monitor", dest="monitor", default=False, action="store_true", help="activate monitoring")
@@ -1043,9 +1061,13 @@ def build_octree_from_tiff_slices():
     darray = None
     tiled_tif_conversion = False
     if len(indirs) > 0 and indirs[0]:
-        darray = slice_to_dask_array(indirs[0], nlevels)
+        rt = slice_to_dask_array(indirs[0], nlevels)
+        darray = rt[0]
+        nlevels = rt[1]
     elif len(infiles) > 0 and infiles[0]:
-        darray = stack_to_dask_array(infiles[0], nlevels)
+        rt = stack_to_dask_array(infiles[0], nlevels)
+        darray = rt[0]
+        nlevels = rt[1]
     else:
         logging.error('Please specify an input dataset.')
         return
