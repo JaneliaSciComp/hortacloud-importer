@@ -19,13 +19,14 @@ a tiff-to-octree converter for Horta.
 conda activate octree
 python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 16 --ktx
 ```
-This command generates both tiff and ktx octrees.
--i: set path to your input folder.
--o: set path to your output folder.
--d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)
--t: thread number. 
---ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.
-
+This command generates both tiff and ktx octrees.  
+```
+-i: set path to your input folder.  
+-o: set path to your output folder.  
+-d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)  
+-t: thread number.  
+--ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.  
+```
 This converter aoutomatically determine the optimal number of levels for your data if you do not set the number of levels by using -l option.
 
 If you browse your data only on Horta3D, please use --ktxonly option. The converter will generate only a ktx octree without a tiff octree.
@@ -49,12 +50,13 @@ The datasize of your tiff stack must be smaller than system memory.
 conda activate octree
 python tiff2octree.py -f /input_slices/tiff -o /output/octree -d 2ndmax -t 16 --ktx
 ```
+```
 -f: set path to your input tif stack.
 -o: set path to your output folder.
 -d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)
 -t: thread number. 
 --ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.
-
+```
 You must use -f option for setting your tif stack as input.
 
 
@@ -68,6 +70,7 @@ You must use -f option for setting your tif stack as input.
 conda activate octree
 bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00"
 ```
+```
 -i: set path to your input folder.
 -o: set path to your output folder.
 -d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)
@@ -77,7 +80,7 @@ bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /i
 --project: set a project name to be charged the cost for the janelia lsf cluster.
 --memory: amount of memory per thread.
 --walltime: runtime limit of each job. The default runtime limit is 1:00. If you are trying to convert large data, you may need to set a longer time limit.
-
+```
 
 ## Usage
 ```
