@@ -970,7 +970,7 @@ def build_octree_from_tiff_slices():
     parser.add_argument("--voxsize", dest="voxsize", type=str, default="1.0,1.0,1.0", help="voxel size of the top-level image")
     parser.add_argument("--memory", dest="memory", type=str, default="16GB", help="memory amount per thread (for LSF cluster)")
     parser.add_argument("--project", dest="project", type=str, default=None, help="project name (for LSF cluster)")
-    parser.add_argument("--maxjobs", dest="maxjobs", type=int, default=16, help="maximum jobs (for LSF cluster)")
+    parser.add_argument("--maxjobs", dest="maxjobs", type=int, default=0, help="maximum jobs (for LSF cluster)")
     parser.add_argument("--walltime", dest="walltime", type=str, default="1:00", help="expected lifetime of a worker. Defaults to one hour, i.e. 1:00 (for LSF cluster)")
     parser.add_argument("--maxbatch", dest="maxbatch", type=int, default=0, help="number of blocks per job")
     parser.add_argument("--lsf", dest="lsf", default=False, action="store_true", help="use LSF cluster")
@@ -1035,6 +1035,10 @@ def build_octree_from_tiff_slices():
     tmpdir = os.path.join(outdir, tmpdir_name)
 
     maxbatch = args.maxbatch
+
+    maxjobs = args.maxjobs;
+    if maxjobs <= 0:
+        maxjobs = tnum
     
     client = setup_cluster(
         cluster_address=args.cluster,
@@ -1042,7 +1046,7 @@ def build_octree_from_tiff_slices():
         is_lsf=args.lsf,
         walltime=args.walltime,
         memory_limit=args.memory,
-        lsf_maximum_jobs=args.maxjobs,
+        lsf_maximum_jobs=maxjobs,
         thread_num=tnum,
         project=args.project
     )

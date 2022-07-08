@@ -9,6 +9,76 @@ a tiff-to-octree converter for Horta.
 5. Run ```pip install /path/to/pyktx```
 6. Run ```conda config --set auto_activate_base false``` (for LSF cluster)
 
+
+## Convert Tiff Slices on a Local PC
+1. Create an input folder to put your tiff slices.
+2. Copy your tiff slices to an input folder.
+3. Create an output folder.
+4. Run the following command.
+```
+conda activate octree
+python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 16 --ktx
+```
+This command generates both tiff and ktx octrees.
+-i: set path to your input folder.
+-o: set path to your output folder.
+-d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)
+-t: thread number. 
+--ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.
+
+This converter aoutomatically determine the optimal number of levels for your data if you do not set the number of levels by using -l option.
+
+If you browse your data only on Horta3D, please use --ktxonly option. The converter will generate only a ktx octree without a tiff octree.
+```
+python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 16 --ktxonly
+```
+
+You can convert a multi-channel image by the following command. 
+```
+python tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -o /output/octree/ -d 2ndmax -t 8 --ktx
+```
+You need to create multiple folders for input data. (e.g. /input_slices/ch1, /input_slices/ch2)
+
+You can load your local octree data to Janelia Workstation by File > New > Tiled Microscope Sample.
+
+## Convert Tiff stack on a Local PC
+The datasize of your tiff stack must be smaller than system memory.
+1. Create an output folder.
+2. Run the following command.
+```
+conda activate octree
+python tiff2octree.py -f /input_slices/tiff -o /output/octree -d 2ndmax -t 16 --ktx
+```
+-f: set path to your input tif stack.
+-o: set path to your output folder.
+-d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)
+-t: thread number. 
+--ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.
+
+You must use -f option for setting your tif stack as input.
+
+
+## Convert Tiff Slices on the Janelia LSF cluster
+
+1. Create an input folder to put your tiff slices.
+2. Copy your tiff slices to an input folder.
+3. Create an output folder.
+4. Run the following command.
+```
+conda activate octree
+bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00"
+```
+-i: set path to your input folder.
+-o: set path to your output folder.
+-d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)
+-t: thread number.
+--ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.
+--lsf: use the lsf cluster
+--project: set a project name to be charged the cost for the janelia lsf cluster.
+--memory: amount of memory per thread.
+--walltime: runtime limit of each job. The default runtime limit is 1:00. If you are trying to convert large data, you may need to set a longer time limit.
+
+
 ## Usage
 ```
 commandline arguments:
