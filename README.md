@@ -11,8 +11,8 @@ a tiff-to-octree converter for Horta.
 
 
 ## Convert Tiff Slices on a Local PC
-1. Create an input folder to put your tiff slices.
-2. Copy your tiff slices to an input folder.
+1. Create an input folder for puuting your tiff slices.
+2. Copy your tiff slices to the input folder.
 3. Create an output folder.
 4. Run the following command.
 ```
@@ -62,8 +62,8 @@ You must use -f option for setting your tif stack as input.
 
 ## Convert Tiff Slices on the Janelia LSF cluster
 
-1. Create an input folder to put your tiff slices.
-2. Copy your tiff slices to an input folder.
+1. Create an input folder for putting your tiff slices.
+2. Copy your tiff slices to the input folder.
 3. Create an output folder.
 4. Run the following command.
 ```
