@@ -76,10 +76,25 @@ bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /i
 -d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)
 -t: thread number.
 --ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.
---lsf: use the lsf cluster
+--lsf: this option is necessary to use the lsf cluster.
 --project: set a project name to be charged the cost for the janelia lsf cluster.
 --memory: amount of memory per thread.
 --walltime: runtime limit of each job. The default runtime limit is 1:00. If you are trying to convert large data, you may need to set a longer time limit.
+```
+
+## Resume a stopped process
+If a process is terminated in the middle of execution, you can resume it by using ```--resume``` option.
+
+if the following process is stopped in the middle of execution:
+```
+conda activate octree
+bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00"
+```
+
+You can resume the process by the following command:
+```
+conda activate octree
+bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00 --resume"
 ```
 
 ## Usage
