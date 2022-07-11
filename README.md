@@ -11,7 +11,7 @@ a tiff-to-octree converter for Horta.
 
 
 ## Convert Tiff Slices on a Local PC
-1. Create an input folder for puting your tiff slices.
+1. Create an input folder for putting your tiff slices.
 2. Copy your tiff slices to the input folder.
 3. Create an output folder.
 4. Run the following command.
