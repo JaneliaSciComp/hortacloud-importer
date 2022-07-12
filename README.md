@@ -82,7 +82,7 @@ bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /i
 --walltime: runtime limit of each job. The default runtime limit is 1:00. If you are trying to convert large data, you may need to set a longer time limit.
 ```
 
-## Resume a stopped process
+## Resume a Stopped Process
 If a process is terminated in the middle of execution, you can resume it by using ```--resume``` option.
 
 if the following process is stopped in the middle of execution:
