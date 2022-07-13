@@ -24,7 +24,7 @@ This command generates both tiff and ktx octrees.
 -i: set path to your input folder.  
 -o: set path to your output folder.  
 -d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)  
--t: thread number.  
+-t: number of threads.  
 --ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.  
 ```
 This converter aoutomatically determine the optimal number of levels for your data if you do not set the number of levels by using -l option.
@@ -54,7 +54,7 @@ python tiff2octree.py -f /input_slices/tiff -o /output/octree -d 2ndmax -t 16 --
 -f: set path to your input tif stack.
 -o: set path to your output folder.
 -d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)
--t: thread number. 
+-t: number of threads. 
 --ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.
 ```
 You must use -f option for setting your tif stack as input.
@@ -74,7 +74,7 @@ bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /i
 -i: set path to your input folder.
 -o: set path to your output folder.
 -d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)
--t: thread number.
+-t: number of threads. 
 --ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.
 --lsf: this option is necessary to use the lsf cluster.
 --project: set a project name to be charged the cost for the janelia lsf cluster.
