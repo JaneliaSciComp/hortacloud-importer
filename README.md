@@ -42,7 +42,7 @@ You need to create multiple folders for input data. (e.g. /input_slices/ch1, /in
 
 You can load your local octree data to Janelia Workstation by File > New > Tiled Microscope Sample.
 
-## Convert Tiff stack on a Local PC
+## Convert a Tiff Stack on a Local PC
 The datasize of your tiff stack must be smaller than system memory.
 1. Create an output folder.
 2. Run the following command.
