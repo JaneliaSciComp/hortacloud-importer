@@ -1,5 +1,6 @@
 # hortacloud-importer
-a tiff-to-octree converter for Horta.
+A tiff-to-octree converter for Horta.  
+This converter can convert tiff slices, tiff stacks and jp2 slices to the multi-resolution octree format for the Horta 3D viewer. The Horta 3D viewer can render the octree dataset and switch its resolution level depending on the zoom ratio. At low zoom, lower resolution images are displayed. When zoomed in, higher resolution images are loaded. This converter aoutomatically determines the optimal number of levels for your data.
 
 ## Initial Setup
 1. Install miniconda (https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
@@ -27,7 +28,7 @@ This command generates both tiff and ktx octrees.
 -t: number of threads.  
 --ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.  
 ```
-This converter aoutomatically determine the optimal number of levels for your data if you do not set the number of levels by using -l option.
+This converter aoutomatically determines the optimal number of levels for your data if you do not set the number of levels by using -l option.
 
 If you browse your data only on Horta3D, please use --ktxonly option. The converter will generate only a ktx octree without a tiff octree.
 ```
