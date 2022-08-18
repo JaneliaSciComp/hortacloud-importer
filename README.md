@@ -131,21 +131,21 @@ examples:
 
 1. use a local cluster. (process image slices)
 conda activate octree
-python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d 2ndmax -t 16
+python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 16
 
 2. use a local cluster. (process image stack)
 conda activate octree
-python tiff2octree.py -f /path/to/tiff_stack.tif -l 3 -o /output/octree -d 2ndmax -t 16
+python tiff2octree.py -f /path/to/tiff_stack.tif -o /output/octree -d 2ndmax -t 16
 
 3. use a LSF cluster.
 conda activate octree
-python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d 2ndmax --lsf --project scicompsoft --memory 12GB --maxjobs 10 -t 10
+python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax --lsf --project scicompsoft --memory 12GB --maxjobs 10 -t 10
 
 4. output a ktx octree without a tiff octree.
 conda activate octree
-python tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 -o /output/octree/ -ktxonly -d 2ndmax -t 8
+python tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -o /output/octree/ -ktxonly -d 2ndmax -t 8
 
 5. specify a cluster by its address.
 conda activate octree
-python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree --cluster tcp://10.60.0.223:8786 -d spline -t 16
+python tiff2octree.py -i /input_slices/tiff -o /output/octree --cluster tcp://10.60.0.223:8786 -d spline -t 16
 ```
