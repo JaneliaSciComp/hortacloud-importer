@@ -1,5 +1,7 @@
 # HortaCloud Data Importer
 
+[![DOI](https://zenodo.org/badge/450619273.svg)](https://zenodo.org/badge/latestdoi/450619273)
+
 Import microscopy data in various formats into the native KTX format for [HortaCloud](https://github.com/JaneliaSciComp/hortacloud).
 
 This converter can convert TIFF slices, TIFF stacks, and JPEG2 slices to the multi-resolution octree format (TIFF and/or KTX) for the Horta 3D viewer. The Horta 3D viewer can render the octree dataset and dynamically shift its resolution level depending on the zoom ratio. At low zoom, lower resolution images are displayed. When zoomed in, higher resolution images are loaded. This converter automatically determines the optimal number of levels for your data.
