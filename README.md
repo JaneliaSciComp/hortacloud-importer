@@ -1,5 +1,10 @@
-# hortacloud-importer
-a tiff-to-octree converter for Horta.
+# HortaCloud Data Importer
+
+[![DOI](https://zenodo.org/badge/450619273.svg)](https://zenodo.org/badge/latestdoi/450619273)
+
+Import microscopy data in various formats into the native KTX format for [HortaCloud](https://github.com/JaneliaSciComp/hortacloud).
+
+This converter can convert TIFF slices, TIFF stacks, and JPEG2 slices to the multi-resolution octree format (TIFF and/or KTX) for the Horta 3D viewer. The Horta 3D viewer can render the octree dataset and dynamically shift its resolution level depending on the zoom ratio. At low zoom, lower resolution images are displayed. When zoomed in, higher resolution images are loaded. This converter automatically determines the optimal number of levels for your data.
 
 ## Initial Setup
 1. Install miniconda (https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
@@ -11,7 +16,7 @@ a tiff-to-octree converter for Horta.
 
 
 ## Convert Tiff Slices on a Local PC
-1. Create an input folder for puuting your tiff slices.
+1. Create an input folder for putting your tiff slices.
 2. Copy your tiff slices to the input folder.
 3. Create an output folder.
 4. Run the following command.
@@ -24,10 +29,10 @@ This command generates both tiff and ktx octrees.
 -i: set path to your input folder.  
 -o: set path to your output folder.  
 -d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)  
--t: thread number.  
+-t: number of threads.  
 --ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.  
 ```
-This converter aoutomatically determine the optimal number of levels for your data if you do not set the number of levels by using -l option.
+This converter aoutomatically determines the optimal number of levels for your data if you do not set the number of levels by using -l option.
 
 If you browse your data only on Horta3D, please use --ktxonly option. The converter will generate only a ktx octree without a tiff octree.
 ```
@@ -42,7 +47,7 @@ You need to create multiple folders for input data. (e.g. /input_slices/ch1, /in
 
 You can load your local octree data to Janelia Workstation by File > New > Tiled Microscope Sample.
 
-## Convert Tiff stack on a Local PC
+## Convert a Tiff Stack on a Local PC
 The datasize of your tiff stack must be smaller than system memory.
 1. Create an output folder.
 2. Run the following command.
@@ -54,7 +59,7 @@ python tiff2octree.py -f /input_slices/tiff -o /output/octree -d 2ndmax -t 16 --
 -f: set path to your input tif stack.
 -o: set path to your output folder.
 -d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)
--t: thread number. 
+-t: number of threads. 
 --ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.
 ```
 You must use -f option for setting your tif stack as input.
@@ -74,12 +79,27 @@ bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /i
 -i: set path to your input folder.
 -o: set path to your output folder.
 -d: downsampling method. you can use 2ndmax, area, aa (anti-aliasing), spline. (2ndmax is being used for the mousdlight project.)
--t: thread number.
+-t: number of threads. 
 --ktx: generate a ktx compressed octree. You need to generate a KTX octree for browsing your data on Horta3D viewer. By default, this converter generates only a tiff octree.
---lsf: use the lsf cluster
+--lsf: this option is necessary to use the lsf cluster.
 --project: set a project name to be charged the cost for the janelia lsf cluster.
 --memory: amount of memory per thread.
 --walltime: runtime limit of each job. The default runtime limit is 1:00. If you are trying to convert large data, you may need to set a longer time limit.
+```
+
+## Resume a Stopped Process
+If a process is terminated in the middle of execution, you can resume it by using ```--resume``` option.
+
+if the following process is stopped in the middle of execution:
+```
+conda activate octree
+bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00"
+```
+
+You can resume the process by the following command:
+```
+conda activate octree
+bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00 --resume"
 ```
 
 ## Usage
@@ -115,21 +135,21 @@ examples:
 
 1. use a local cluster. (process image slices)
 conda activate octree
-python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d 2ndmax -t 16
+python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 16
 
 2. use a local cluster. (process image stack)
 conda activate octree
-python tiff2octree.py -f /path/to/tiff_stack.tif -l 3 -o /output/octree -d 2ndmax -t 16
+python tiff2octree.py -f /path/to/tiff_stack.tif -o /output/octree -d 2ndmax -t 16
 
 3. use a LSF cluster.
 conda activate octree
-python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree -d 2ndmax --lsf --project scicompsoft --memory 12GB --maxjobs 10 -t 10
+python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax --lsf --project scicompsoft --memory 12GB --maxjobs 10 -t 10
 
 4. output a ktx octree without a tiff octree.
 conda activate octree
-python tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -l 3 -o /output/octree/ -ktxonly -d 2ndmax -t 8
+python tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -o /output/octree/ -ktxonly -d 2ndmax -t 8
 
 5. specify a cluster by its address.
 conda activate octree
-python tiff2octree.py -i /input_slices/tiff -l 3 -o /output/octree --cluster tcp://10.60.0.223:8786 -d spline -t 16
+python tiff2octree.py -i /input_slices/tiff -o /output/octree --cluster tcp://10.60.0.223:8786 -d spline -t 16
 ```
