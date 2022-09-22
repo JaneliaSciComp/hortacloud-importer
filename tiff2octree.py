@@ -42,6 +42,8 @@ from shutil import which, copyfile, rmtree
 from typing import Union, List, Dict, Any, Optional
 import warnings
 
+import itertools
+
 import ktx
 from ktx.util import create_mipmaps, mipmap_dimension, interleave_channel_arrays, downsample_array_xy
 from ktx.octree.ktx_from_rendered_tiff import RenderedMouseLightOctree, RenderedTiffBlock
@@ -51,6 +53,9 @@ from rasterio.windows import Window
 
 from scipy import ndimage
 
+import zarr
+import numcodecs
+numcodecs.blosc.use_threads = False
 
 dask.config.set({"jobqueue.lsf.use-stdin": True})
 
@@ -309,6 +314,47 @@ def gen_block_from_slices(chunk_coord, file_paths, target_path, nlevels, dim_lea
             skimage.io.imsave(full_path, img_data, compression=("ZLIB", 6))
         else:
             logging.info("skipped (empty): " + full_path)
+
+def gen_blocks_from_n5_zarr_batch(chunk_coords, input_array_path, target_path, nlevels, dim_leaf, ch, type, resolutions, resume):
+    numcodecs.blosc.use_threads = False
+    input_array = None
+    n5store = None
+    try:
+        input_array = zarr.open(input_array_path, mode='r')
+    except zarr.errors.PathNotFoundError:
+        n5store = zarr.N5Store(input_array_path)
+        input_array = zarr.open(store=n5store, mode='r')
+    for pos in chunk_coords:
+        gen_block_from_n5_zarr(pos, input_array, target_path, nlevels, dim_leaf, ch, type, resolutions, resume)
+    n5store.close()
+
+def gen_block_from_n5_zarr(chunk_coord, input_array, target_path, nlevels, dim_leaf, chid, type, resolutions, resume):
+    relpath = get_octree_relative_path(chunk_coord, nlevels)
+
+    dir_path = os.path.join(target_path, relpath)
+
+    full_path = os.path.join(dir_path, "default.{0}.tif".format(chid))
+    if resume and os.path.exists(full_path):
+        logging.info("skipped (exists): " + full_path)
+        return
+
+    #logging.info((dim_leaf[0]*chunk_coord[0], dim_leaf[1]*chunk_coord[1], dim_leaf[2]*chunk_coord[2]))
+
+    img_data = get_cropped_image_n5_zarr(input_array, dim_leaf[0]*(chunk_coord[0]-1), dim_leaf[1]*(chunk_coord[1]-1), dim_leaf[2]*(chunk_coord[2]-1), dim_leaf[0], dim_leaf[1], dim_leaf[2], type)
+
+    if img_data.max() > 0:
+        logging.info(full_path)
+        Path(dir_path).mkdir(parents=True, exist_ok=True)
+        skimage.io.imsave(full_path, img_data, compression=("ZLIB", 6))
+    else:
+        logging.info("skipped (empty): " + full_path)
+
+def get_cropped_image_n5_zarr(input_array, z0, y0, x0, d, h, w, type):
+    output = np.zeros((d, h, w), dtype=type)
+    
+    output[:d, :h, :w] = input_array[z0:z0+d, y0:y0+h, x0:x0+w]
+
+    return output
 
 #return True if the block exists
 def check_block(chunk_coord, target_path, nlevels, chid, chnum):
@@ -645,6 +691,134 @@ def slice_to_dask_array(
     
     return (ret, lv)
 
+
+def get_pixel_resolution_n5_zarr(indir: str):
+    ret = None
+    if indir:
+        img = None
+        try:
+            img = zarr.open(indir, mode='r')
+        except:
+            try:
+                img = zarr.open(store=zarr.N5Store(indir), mode='r')
+            except:
+                return ret
+        if not img and 'pixelResolution' in img.attrs:
+            ret = img.attrs['pixelResolution']
+        
+    return ret
+
+
+def check_n5_levels(indir: str):
+    ret = None
+    levels = []
+    for entry2 in scandir(indir):
+        levels.append(entry2.name)
+        for i in range(0, 10):
+            lv_name = 's{0}'.format(i)
+            if lv_name in levels:
+                lvpath = os.path.join(indir, lv_name)
+                try:
+                    img = zarr.open(store=zarr.N5Store(lvpath), mode='r')
+                    ret = lvpath
+                    break
+                except:
+                    continue   
+    return ret               
+
+def check_n5_channels(indir: str):
+    in_dirs = []
+
+    p = check_n5_levels(indir)
+    if p:
+        in_dirs.append(p)
+
+    if len(in_dirs) > 0:
+        return in_dirs
+
+    for entry in scandir(indir):
+        channels = []
+        if entry.is_dir(follow_symlinks=False):
+            channels.append(entry.name)
+        for i in range(0, 10):
+            ch_name = 'c{0}'.format(i)
+            if ch_name in channels:
+                p = check_n5_levels(entry.path)
+                if p:
+                    in_dirs.append(p)
+    
+    if len(in_dirs) > 0:
+        return in_dirs
+
+    for entry in scandir(indir):
+        if entry.is_dir(follow_symlinks=False):
+            p = check_n5_levels(entry.path)
+            if p:
+                in_dirs.append(p)
+
+    if len(in_dirs) > 0:
+        return in_dirs
+
+    img = None
+    try:
+        img = zarr.open(indir, mode='r')
+    except:
+        try: 
+            img = zarr.open(store=zarr.N5Store(indir), mode='r')
+        except:
+            return in_dirs
+    if isinstance(img, zarr.core.Array):
+        in_dirs.append(indir)
+    elif isinstance(img, zarr.hierarchy.Group):
+        for i in img:
+            if isinstance(img[i], zarr.core.Array):
+                in_dirs.append(os.path.join(indir, img[i].path))
+
+    return in_dirs
+
+def n5_zarr_to_dask_array(
+    indir: str,
+    nlevels: int
+    ):
+    ret = None
+    images = None
+    dim = None
+    volume_dtype = None
+    lv = nlevels
+    if indir:
+        img = None
+        try:
+            img = zarr.open(indir, mode='r')
+        except zarr.errors.PathNotFoundError:
+            img = zarr.open(store=zarr.N5Store(indir), mode='r')
+
+        samples_per_pixel = 1
+        if isinstance(img, zarr.core.Array):
+            dim = np.asarray(img.shape)
+            volume_dtype = img.dtype
+        elif isinstance(img, zarr.hierarchy.Group):
+            for i in range(0, 10):
+                item_name = 's{0}'.format(i)
+                if item_name in img:
+                    dim = np.asarray(img[item_name].shape)
+                    volume_dtype = img.dtype
+                    break
+
+        if not volume_dtype:
+            return None
+        
+        if lv < 1:
+            lv = calc_optimal_nlevels(dim)
+
+        dim = adjust_dimensions(dim, lv)
+        dim_leaf = [x >> (lv - 1) for x in dim]
+
+        logging.info("Adjusted image size: " + str(dim) + ", Dim leaf: " + str(dim_leaf))
+
+        ret = da.zeros((dim[0], dim[1], dim[2]), chunks=(dim_leaf[0], dim_leaf[1], dim_leaf[2]), dtype=volume_dtype)
+    
+    return (ret, lv)
+
 def parse_voxel_size(voxel_size_str: str):
     vsstr = voxel_size_str.split(",")
     vs = []
@@ -768,7 +942,7 @@ def save_tiff_blocks(input_slices: List[str], output_path: str, z: int, nlevels:
     futures = []
     bnum = pow(2, nlevels - 1)
     volume_dtype = darray.dtype
-    samples_per_pixel = darray.shape[3]
+    samples_per_pixel = darray.shape[3] if len(darray.shape) >= 4 else 1
     dim_leaf = darray.chunksize[:3]
     vs = parse_voxel_size(voxel_size_str)
 
@@ -791,11 +965,37 @@ def save_tiff_blocks(input_slices: List[str], output_path: str, z: int, nlevels:
     with ProgressBar():
         dask.compute(futures)
 
+# loop over the chunks in the dask array.
+def save_tiff_blocks_from_n5_zarr(input_array_path: str, output_path: str, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array, resume: bool):
+    futures = []
+    bnum = pow(2, nlevels - 1)
+    volume_dtype = darray.dtype
+    dim_leaf = darray.chunksize[:3]
+    vs = parse_voxel_size(voxel_size_str)
+
+    batch_block_num = (int)(bnum * bnum / task_num)
+    if maxbatch > 0 and batch_block_num > maxbatch:
+        batch_block_num = maxbatch
+    if batch_block_num < 1: 
+        batch_block_num = 1
+    coord_list = []
+    for inds in itertools.product(*map(range, darray.blocks.shape)):
+        coord_list.append((inds[0]+1, inds[1]+1, inds[2]+1))
+        if len(coord_list) >= batch_block_num:
+            future = dask.delayed(gen_blocks_from_n5_zarr_batch)(coord_list, input_array_path, output_path, nlevels, dim_leaf, ch, volume_dtype, vs, resume)
+            futures.append(future)
+            coord_list = []
+    if len(coord_list) > 0:
+        future = dask.delayed(gen_blocks_from_n5_zarr_batch)(coord_list, input_array_path, output_path, nlevels, dim_leaf, ch, volume_dtype, vs, resume)
+        futures.append(future)
+    with ProgressBar():
+        dask.compute(futures)
+
 def check_tiff_blocks(output_path: str, z: int, nlevels: int, ch: int, darray: da.Array):
     logging.info("resume: checking tiff blocks")
     futures = []
     bnum = pow(2, nlevels - 1)
-    samples_per_pixel = darray.shape[3]
+    samples_per_pixel = darray.shape[3] if len(darray.shape) >= 4 else 1
     for y in range(1, bnum+1):
         for x in range(1, bnum+1):
             future = dask.delayed(check_block)((z,y,x), output_path, nlevels, ch, samples_per_pixel)
@@ -810,6 +1010,13 @@ def check_tiff_blocks(output_path: str, z: int, nlevels: int, ch: int, darray: d
             break
     return ret
     #dlist = [item for sublist in dask_result for item in sublist]
+
+def gen_highest_resolution_blocks_from_n5_zarr(indirs: List[str], output_path: str, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array, resume: bool):
+    dim_leaf = darray.chunksize[:3]
+    for i in range(0, len(indirs)):
+        save_tiff_blocks_from_n5_zarr(input_array_path=indirs[i], output_path=output_path, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch+i, voxel_size_str=voxel_size_str, darray=darray, resume=resume)
+        logging.info("done")
+    return
 
 def gen_highest_resolution_blocks_from_slices(indirs: List[str], output_path: str, tmpdir_path: str, nlevels: int, task_num: int, maxbatch: int, ch: int, voxel_size_str: str, darray: da.Array, resume: bool):
     dim_leaf = darray.chunksize[:3]
@@ -1003,6 +1210,8 @@ def build_octree_from_tiff_slices():
     ktx = args.ktx
     ktx_mkdir = False
     resume = args.resume
+    is_n5_zarr = False
+    voxsize = args.voxsize
 
     if ktxout and not outdir:
         ktxonly = True
@@ -1065,7 +1274,32 @@ def build_octree_from_tiff_slices():
     darray = None
     tiled_tif_conversion = False
     if len(indirs) > 0 and indirs[0]:
-        rt = slice_to_dask_array(indirs[0], nlevels)
+        n5_zarr_dirs = []
+        root_dir = indirs[0]
+        for d in indirs:
+            ret = check_n5_channels(d)
+            if len(ret) > 0:
+                n5_zarr_dirs.extend(ret)
+        if len(n5_zarr_dirs) > 0:
+            indirs = n5_zarr_dirs
+        rt = n5_zarr_to_dask_array(indirs[0], nlevels)
+        if not rt:
+            rt = slice_to_dask_array(indirs[0], nlevels)
+        else:
+            pix_res = get_pixel_resolution_n5_zarr(indirs[0])
+            if pix_res:
+                pix_res = get_pixel_resolution_n5_zarr(root_dir)
+            if pix_res and len(pix_res) > 0:
+                res_str = ""
+                for i in range(0, 3):
+                    if i >= 1:
+                        res_str += ','
+                    if i < len(pix_res):
+                        res_str += '{0}'.format(pix_res[i])
+                    else:
+                        res_str += '1.0'
+                voxsize = res_str
+            is_n5_zarr = True 
         darray = rt[0]
         nlevels = rt[1]
     elif len(infiles) > 0 and infiles[0]:
@@ -1078,7 +1312,7 @@ def build_octree_from_tiff_slices():
 
     dim = darray.shape[:3]
     volume_dtype = darray
-    samples_per_pixel = darray.shape[3]
+    samples_per_pixel = darray.shape[3] if len(darray.shape) >= 4 else 1
     dim_leaf = darray.chunksize[:3]
 
     logging.info("Will generate octree with " + str(nlevels) +" levels to " + str(outdir))
@@ -1094,7 +1328,7 @@ def build_octree_from_tiff_slices():
         with open(cfpath, 'w') as fp:
             pass
 
-    save_transform_txt(outdir=outdir, origin=args.origin, voxsize=args.voxsize, nlevels=nlevels, ktxout=ktxout)
+    save_transform_txt(outdir=outdir, origin=args.origin, voxsize=voxsize, nlevels=nlevels, ktxout=ktxout)
 
     if samples_per_pixel > 1:
         indirs = [indirs[0]]
@@ -1107,17 +1341,17 @@ def build_octree_from_tiff_slices():
     else:
         #save the highest level
         if len(indirs) > 0 and indirs[0] != "": # image slices
-            gen_highest_resolution_blocks_from_slices(indirs=indirs, output_path=outdir, tmpdir_path=tmpdir, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch, voxel_size_str=args.voxsize, darray=darray, resume=resume)
+            if is_n5_zarr:
+                gen_highest_resolution_blocks_from_n5_zarr(indirs=indirs, output_path=outdir, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch, voxel_size_str=voxsize, darray=darray, resume=resume)
+            else:
+                gen_highest_resolution_blocks_from_slices(indirs=indirs, output_path=outdir, tmpdir_path=tmpdir, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch=ch, voxel_size_str=voxsize, darray=darray, resume=resume)
         elif len(infiles) > 0: #tif stack
             gen_highest_resolution_blocks_from_stack(infiles=infiles, output_path=outdir, nlevels=nlevels, ch=ch, darray=darray)
 
     if os.path.exists(cfpath):
         os.remove(cfpath)
 
-    downsample_octree_blocks(output_path=outdir, method=dmethod, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch_ids=ch_ids, voxel_size_str=args.voxsize, darray=darray, ktxdir=ktxout, delete_source=ktxonly, resume=resume)
-
-    #if ktx:
-    #    ktx_conversion(indir=outdir, outdir=ktxout, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, delete_source=ktxonly)
+    downsample_octree_blocks(output_path=outdir, method=dmethod, nlevels=nlevels, task_num=task_num, maxbatch=maxbatch, ch_ids=ch_ids, voxel_size_str=voxsize, darray=darray, ktxdir=ktxout, delete_source=ktxonly, resume=resume)
 
     try:
         if os.path.isdir(tmpdir):

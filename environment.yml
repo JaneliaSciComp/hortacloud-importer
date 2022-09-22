@@ -3,7 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.9.7
+  - python
   - pip
   - dask
   - dask-image
@@ -17,4 +17,6 @@ dependencies:
   - pylibtiff
   - bitarray
   - rasterio
+  - zarr
+  - numcodecs
 prefix: /groups/scicompsoft/home/kawaset/miniconda3/envs/octree
