@@ -22,7 +22,7 @@ This converter can convert TIFF slices, TIFF stacks, N5/Zarr and JPEG2 slices to
 4. Run the following command.
 ```
 conda activate octree
-python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 16 --ktx
+python tiff2octree.py -i /path/to/input_dir -o /path/to/output_dir -d 2ndmax -t 16 --ktx
 ```
 This command generates both tiff and ktx octrees.  
 ```
@@ -36,12 +36,12 @@ This converter aoutomatically determines the optimal number of levels for your d
 
 If you browse your data only on Horta3D, please use --ktxonly option. The converter will generate only a ktx octree without a tiff octree.
 ```
-python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 16 --ktxonly
+python tiff2octree.py -i /path/to/input_dir -o /path/to/output_dir -d 2ndmax -t 16 --ktxonly
 ```
 
 You can convert a multi-channel image by the following command. 
 ```
-python tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -o /output/octree/ -d 2ndmax -t 8 --ktx
+python tiff2octree.py -i /path/to/input_dir/ch1,/path/to/input_dir/ch2 -o /output/octree/ -d 2ndmax -t 8 --ktx
 ```
 You need to create multiple folders for input data. (e.g. /input_slices/ch1, /input_slices/ch2)
 
@@ -73,7 +73,7 @@ You must use -f option for setting your tif stack as input.
 4. Run the following command.
 ```
 conda activate octree
-bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00"
+bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /path/to/input_dir -o /path/to/output_dir -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00"
 ```
 ```
 -i: set path to your input folder.
@@ -93,13 +93,13 @@ If a process is terminated in the middle of execution, you can resume it by usin
 if the following process is stopped in the middle of execution:
 ```
 conda activate octree
-bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00"
+bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /path/to/input_dir -o /path/to/output_dir -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00"
 ```
 
 You can resume the process by the following command:
 ```
 conda activate octree
-bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00 --resume"
+bsub -n 1 -W 24:00 -o log_output.txt -P scicompsoft "python tiff2octree.py -i /path/to/input_dir -o /path/to/output_dir -d 2ndmax -t 10 --ktx --lsf --project scicompsoft --memory 16GB --walltime 8:00 --resume"
 ```
 
 ## Usage
@@ -135,7 +135,7 @@ examples:
 
 1. use a local cluster. (process image slices)
 conda activate octree
-python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax -t 16
+python tiff2octree.py -i /path/to/input_dir -o /path/to/output_dir -d 2ndmax -t 16
 
 2. use a local cluster. (process image stack)
 conda activate octree
@@ -143,13 +143,13 @@ python tiff2octree.py -f /path/to/tiff_stack.tif -o /output/octree -d 2ndmax -t 
 
 3. use a LSF cluster.
 conda activate octree
-python tiff2octree.py -i /input_slices/tiff -o /output/octree -d 2ndmax --lsf --project scicompsoft --memory 12GB --maxjobs 10 -t 10
+python tiff2octree.py -i /path/to/input_dir -o /path/to/output_dir -d 2ndmax --lsf --project scicompsoft --memory 12GB --maxjobs 10 -t 10
 
 4. output a ktx octree without a tiff octree.
 conda activate octree
-python tiff2octree.py -i /input_slices/ch1,/input_slices/ch2 -o /output/octree/ -ktxonly -d 2ndmax -t 8
+python tiff2octree.py -i /path/to/input_dir/ch1,/path/to/input_dir/ch2 -o /path/to/output_dir -ktxonly -d 2ndmax -t 8
 
 5. specify a cluster by its address.
 conda activate octree
-python tiff2octree.py -i /input_slices/tiff -o /output/octree --cluster tcp://10.60.0.223:8786 -d spline -t 16
+python tiff2octree.py -i /path/to/input_dir -o /path/to/output_dir --cluster tcp://10.60.0.223:8786 -d spline -t 16
 ```
