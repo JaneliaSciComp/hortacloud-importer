@@ -4,7 +4,7 @@
 
 Import microscopy data in various formats into the native KTX format for [HortaCloud](https://github.com/JaneliaSciComp/hortacloud).
 
-This converter can convert TIFF slices, TIFF stacks, and JPEG2 slices to the multi-resolution octree format (TIFF and/or KTX) for the Horta 3D viewer. The Horta 3D viewer can render the octree dataset and dynamically shift its resolution level depending on the zoom ratio. At low zoom, lower resolution images are displayed. When zoomed in, higher resolution images are loaded. This converter automatically determines the optimal number of levels for your data.
+This converter can convert TIFF slices, TIFF stacks, N5/Zarr and JPEG2 slices to the multi-resolution octree format (TIFF and/or KTX) for the Horta 3D viewer. The Horta 3D viewer can render the octree dataset and dynamically shift its resolution level depending on the zoom ratio. At low zoom, lower resolution images are displayed. When zoomed in, higher resolution images are loaded. This converter automatically determines the optimal number of levels for your data.
 
 ## Initial Setup
 1. Install miniconda (https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
@@ -15,7 +15,7 @@ This converter can convert TIFF slices, TIFF stacks, and JPEG2 slices to the mul
 6. Run ```conda config --set auto_activate_base false``` (for LSF cluster)
 
 
-## Convert Tiff Slices on a Local PC
+## Convert Tiff Slices or N5/Zarr datasets on a Local PC
 1. Create an input folder for putting your tiff slices.
 2. Copy your tiff slices to the input folder.
 3. Create an output folder.
@@ -65,7 +65,7 @@ python tiff2octree.py -f /input_slices/tiff -o /output/octree -d 2ndmax -t 16 --
 You must use -f option for setting your tif stack as input.
 
 
-## Convert Tiff Slices on the Janelia LSF cluster
+## Convert Tiff Slices or N5/Zarr datasets on the Janelia LSF cluster
 
 1. Create an input folder for putting your tiff slices.
 2. Copy your tiff slices to the input folder.
