@@ -322,11 +322,9 @@ def gen_blocks_from_n5_zarr_batch(chunk_coords, input_array_path, target_path, n
     try:
         input_array = zarr.open(input_array_path, mode='r')
     except zarr.errors.PathNotFoundError:
-        n5store = zarr.N5Store(input_array_path)
-        input_array = zarr.open(store=n5store, mode='r')
+        input_array = zarr.open(store=zarr.N5Store(input_array_path), mode='r')
     for pos in chunk_coords:
         gen_block_from_n5_zarr(pos, input_array, target_path, nlevels, dim_leaf, ch, type, resolutions, resume)
-    n5store.close()
 
 def gen_block_from_n5_zarr(chunk_coord, input_array, target_path, nlevels, dim_leaf, chid, type, resolutions, resume):
     relpath = get_octree_relative_path(chunk_coord, nlevels)
