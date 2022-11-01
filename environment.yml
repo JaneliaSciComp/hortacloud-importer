@@ -18,5 +18,7 @@ dependencies:
   - bitarray
   - rasterio
   - zarr
+  - s3fs
+  - boto3
   - numcodecs
 prefix: /groups/scicompsoft/home/kawaset/miniconda3/envs/octree

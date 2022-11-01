@@ -54,6 +54,7 @@ from rasterio.windows import Window
 from scipy import ndimage
 
 import zarr
+import s3fs
 import numcodecs
 numcodecs.blosc.use_threads = False
 
@@ -350,7 +351,7 @@ def gen_block_from_n5_zarr(chunk_coord, input_array, target_path, nlevels, dim_l
 def get_cropped_image_n5_zarr(input_array, z0, y0, x0, d, h, w, type):
     output = np.zeros((d, h, w), dtype=type)
     
-    output[:d, :h, :w] = input_array[z0:z0+d, y0:y0+h, x0:x0+w]
+    output[:d, :h, :w] = input_array[..., z0:z0+d, y0:y0+h, x0:x0+w]
 
     return output
 
@@ -727,35 +728,36 @@ def check_n5_levels(indir: str):
 def check_n5_channels(indir: str):
     in_dirs = []
 
-    p = check_n5_levels(indir)
-    if p:
-        in_dirs.append(p)
+    if os.path.exists(indir):
+        p = check_n5_levels(indir)
+        if p:
+            in_dirs.append(p)
 
-    if len(in_dirs) > 0:
-        return in_dirs
+        if len(in_dirs) > 0:
+            return in_dirs
 
-    for entry in scandir(indir):
-        channels = []
-        if entry.is_dir(follow_symlinks=False):
-            channels.append(entry.name)
-        for i in range(0, 10):
-            ch_name = 'c{0}'.format(i)
-            if ch_name in channels:
+        for entry in scandir(indir):
+            channels = []
+            if entry.is_dir(follow_symlinks=False):
+                channels.append(entry.name)
+            for i in range(0, 10):
+                ch_name = 'c{0}'.format(i)
+                if ch_name in channels:
+                    p = check_n5_levels(entry.path)
+                    if p:
+                        in_dirs.append(p)
+    
+        if len(in_dirs) > 0:
+            return in_dirs
+
+        for entry in scandir(indir):
+            if entry.is_dir(follow_symlinks=False):
                 p = check_n5_levels(entry.path)
                 if p:
                     in_dirs.append(p)
-    
-    if len(in_dirs) > 0:
-        return in_dirs
 
-    for entry in scandir(indir):
-        if entry.is_dir(follow_symlinks=False):
-            p = check_n5_levels(entry.path)
-            if p:
-                in_dirs.append(p)
-
-    if len(in_dirs) > 0:
-        return in_dirs
+        if len(in_dirs) > 0:
+            return in_dirs
 
     img = None
     try:
@@ -792,13 +794,13 @@ def n5_zarr_to_dask_array(
 
         samples_per_pixel = 1
         if isinstance(img, zarr.core.Array):
-            dim = np.asarray(img.shape)
+            dim = np.asarray(img.shape)[-3:]
             volume_dtype = img.dtype
         elif isinstance(img, zarr.hierarchy.Group):
             for i in range(0, 10):
                 item_name = 's{0}'.format(i)
                 if item_name in img:
-                    dim = np.asarray(img[item_name].shape)
+                    dim = np.asarray(img[item_name].shape)[-3:]
                     volume_dtype = img.dtype
                     break
 
