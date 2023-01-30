@@ -790,7 +790,10 @@ def n5_zarr_to_dask_array(
         try:
             img = zarr.open(indir, mode='r')
         except zarr.errors.PathNotFoundError:
-            img = zarr.open(store=zarr.N5Store(indir), mode='r')
+            try:
+                img = zarr.open(store=zarr.N5Store(indir), mode='r')
+            except zarr.errors.PathNotFoundError:
+                return None
 
         samples_per_pixel = 1
         if isinstance(img, zarr.core.Array):
