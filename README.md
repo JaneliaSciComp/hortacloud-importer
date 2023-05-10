@@ -9,6 +9,7 @@ This converter can convert TIFF slices, TIFF stacks, N5/Zarr and JPEG2 slices to
 ## Initial Setup
 1. Install miniconda (https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html)
 2. Clone pyktx (https://github.com/JaneliaSciComp/pyktx)
+3. Run ```conda config --set channel_priority strict```
 3. Run ```conda env create -f environment.yml```
 4. Run ```conda activate octree```
 5. Run ```pip install /path/to/pyktx```

@@ -1,7 +1,7 @@
 name: octree
 channels:
-  - conda-forge
   - defaults
+  - conda-forge
 dependencies:
   - python
   - pip
