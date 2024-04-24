@@ -4,6 +4,7 @@ channels:
   - conda-forge
 dependencies:
   - python
+  - numpy=1.16.4
   - pip
   - dask
   - dask-image
