@@ -1,6 +1,5 @@
 # HortaCloud Data Importer
 
-[![DOI](https://zenodo.org/badge/450619273.svg)](https://zenodo.org/badge/latestdoi/450619273)
 
 Import microscopy data in various formats into the native KTX format for [HortaCloud](https://github.com/JaneliaSciComp/hortacloud).
 
